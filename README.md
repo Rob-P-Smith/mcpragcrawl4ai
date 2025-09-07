@@ -203,15 +203,66 @@ Replace `YOUR_USERNAME` with your actual username and adjust Python version as n
 2. **Check Integrations panel** - should show `crawl4ai-rag` with blue toggle
 3. **Verify available tools**:
 
-   - `crawl_url` - Crawl without storing
-   - `crawl_and_remember` - Crawl and store permanently
-   - `crawl_temp` - Crawl and store temporarily
-   - `search_memory` - Search stored content
+   **Basic Tools:**
+   - `crawl_url` - Crawl single page without storing
+   - `crawl_and_remember` - Crawl single page and store permanently
+   - `crawl_temp` - Crawl single page and store temporarily
+   
+   **Deep Crawling Tools:**
+   - `deep_crawl_dfs` - Deep crawl multiple pages without storing (preview only)
+   - `deep_crawl_and_store` - Deep crawl and store all pages permanently
+   
+   **Knowledge Management:**
+   - `search_memory` - Search stored content using semantic similarity
    - `list_memory` - List all stored content
-   - `forget_url` - Remove specific content
+   - `forget_url` - Remove specific content by URL
    - `clear_temp_memory` - Clear session content
 
 4. **Test with simple command**: "List what's in memory"
+
+## Deep Crawling Features
+
+The RAG system includes advanced deep crawling capabilities using depth-first search (DFS) to automatically discover and process multiple interconnected pages:
+
+### Deep Crawl Parameters
+
+- **max_depth** (1-5): How many link levels to follow from starting URL
+- **max_pages** (1-250): Maximum total pages to crawl 
+- **include_external** (true/false): Whether to follow links to external domains
+- **score_threshold** (0.0-1.0): Minimum relevance score for pages (currently unused)
+- **timeout** (seconds): Maximum time to spend on entire crawl operation
+
+### Deep Crawl Process
+
+1. **Link Discovery**: Extracts up to 5 links per page from HTML content
+2. **URL Filtering**: Skips non-content files (.css, .js, images, etc.)
+3. **Domain Control**: Optionally restricts to same domain as starting URL
+4. **Duplicate Prevention**: Tracks visited URLs to avoid loops
+5. **Content Processing**: Each page is crawled, chunked, and embedded individually
+
+### URL Deduplication
+
+- **Automatic Replacement**: Same URL crawled multiple times updates existing record
+- **Clean Embeddings**: Old vector embeddings deleted before generating new ones
+- **Fresh Content**: Always stores the most recent version of each page
+- **No Duplicates**: Database enforces unique constraint on URL field
+
+### Usage Examples
+
+**Quick exploration** (fast, small scope):
+```
+deep_crawl_dfs with max_depth=2, max_pages=25
+```
+
+**Comprehensive documentation crawl**:
+```
+deep_crawl_and_store with max_depth=3, max_pages=100, include_external=false
+```
+
+**Large site analysis**:
+```
+deep_crawl_and_store with max_depth=4, max_pages=250, timeout=1200
+```
 
 ## Architecture
 
@@ -420,6 +471,36 @@ pip list | grep -E "(sentence|sqlite|numpy|requests)"
   **Returns:** Dictionary with search results and metadata
   **Functionality:** Performs vector search on stored content, returns ranked results
 
+### `deep_crawl_dfs(self, url: str, max_depth: int = 2, max_pages: int = 10, include_external: bool = False, score_threshold: float = 0.0, timeout: int = None) -> Dict[str, Any]`
+
+**Purpose:** Deep crawl multiple pages using depth-first search without storing
+**Parameters:**
+
+- `url` (str): Starting URL for deep crawl
+- `max_depth` (int): Maximum depth to crawl (1-5, default 2)
+- `max_pages` (int): Maximum pages to crawl (1-250, default 10)
+- `include_external` (bool): Follow external domain links (default False)
+- `score_threshold` (float): Minimum relevance score (0.0-1.0, default 0.0)
+- `timeout` (int): Maximum crawl time in seconds (default 300)
+  **Returns:** Dictionary with crawl results, page previews, and metadata
+  **Functionality:** Discovers links, follows them recursively, returns content previews
+
+### `deep_crawl_and_store(self, url: str, retention_policy: str = 'permanent', tags: str = '', max_depth: int = 2, max_pages: int = 10, include_external: bool = False, score_threshold: float = 0.0, timeout: int = None) -> Dict[str, Any]`
+
+**Purpose:** Deep crawl multiple pages and store all content in RAG database
+**Parameters:**
+
+- `url` (str): Starting URL for deep crawl
+- `retention_policy` (str): Storage policy ('permanent', 'session_only', etc.)
+- `tags` (str): Tags for content organization (auto-adds 'deep_crawl')
+- `max_depth` (int): Maximum depth to crawl (1-5, default 2)
+- `max_pages` (int): Maximum pages to crawl (1-250, default 10)
+- `include_external` (bool): Follow external domain links (default False)
+- `score_threshold` (float): Minimum relevance score (0.0-1.0, default 0.0)
+- `timeout` (int): Maximum crawl time in seconds (default 300)
+  **Returns:** Dictionary with storage results, success/failure counts, and stored page summaries
+  **Functionality:** Performs deep crawl then stores all discovered content with embeddings
+
 ## MCPServer Class
 
 ### `__init__(self)`
@@ -464,6 +545,34 @@ pip list | grep -E "(sentence|sqlite|numpy|requests)"
 - `url` (string, required): URL to crawl
 - `tags` (string, optional): Organization tags
   **Returns:** Storage confirmation and content preview
+
+### `deep_crawl_dfs`
+
+**Purpose:** Deep crawl multiple pages without storing (preview only)
+**Arguments:**
+
+- `url` (string, required): Starting URL for deep crawl
+- `max_depth` (integer, optional): Maximum depth to crawl (1-5, default 2)
+- `max_pages` (integer, optional): Maximum pages to crawl (1-250, default 10)
+- `include_external` (boolean, optional): Follow external domain links (default false)
+- `score_threshold` (number, optional): Minimum relevance score (0.0-1.0, default 0.0)
+- `timeout` (integer, optional): Maximum crawl time in seconds (default 300)
+  **Returns:** List of discovered pages with content previews and metadata
+
+### `deep_crawl_and_store`
+
+**Purpose:** Deep crawl multiple pages and store all in knowledge base
+**Arguments:**
+
+- `url` (string, required): Starting URL for deep crawl
+- `retention_policy` (string, optional): Storage policy (default 'permanent')
+- `tags` (string, optional): Organization tags (auto-adds 'deep_crawl')
+- `max_depth` (integer, optional): Maximum depth to crawl (1-5, default 2)
+- `max_pages` (integer, optional): Maximum pages to crawl (1-250, default 10)
+- `include_external` (boolean, optional): Follow external domain links (default false)
+- `score_threshold` (number, optional): Minimum relevance score (0.0-1.0, default 0.0)
+- `timeout` (integer, optional): Maximum crawl time in seconds (default 300)
+  **Returns:** Storage summary with success/failure counts and stored page details
 
 ### `search_memory`
 

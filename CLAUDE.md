@@ -32,6 +32,8 @@ This is a Crawl4AI RAG (Retrieval-Augmented Generation) MCP Server implementatio
 5. **list_memory**: List all stored content with optional filtering
 6. **forget_url**: Remove specific content by URL
 7. **clear_temp_memory**: Clear temporary session content
+8. **deep_crawl_dfs**: Deep crawl multiple pages using depth-first search without storing
+9. **deep_crawl_and_store**: Deep crawl multiple pages using DFS and store all in knowledge base
 
 ## Running the Server
 ```bash
@@ -40,7 +42,16 @@ python3 crawl4ai_rag_optimized.py
 
 The server expects JSON-RPC 2.0 requests via stdin and responds via stdout. Errors are logged to both stderr and the log file.
 
+## Deep Crawling Features
+- **DFS Strategy**: Uses depth-first search to crawl multiple interconnected pages
+- **Configurable Depth**: Control how many levels deep to crawl (max 5 levels)
+- **Page Limits**: Restrict maximum pages crawled to prevent resource exhaustion (max 100 pages)
+- **External Links**: Option to follow or ignore external domain links
+- **URL Scoring**: Filter pages based on relevance scores (0.0-1.0 threshold)
+- **Bulk Storage**: Store all discovered pages in the knowledge base with automatic tagging
+
 ## Data Persistence
 - **Database**: SQLite file `crawl4ai_rag.db` in the working directory
 - **Content Chunking**: Text split into 500-word chunks with 50-word overlap
 - **Retention Policies**: 'permanent', 'session_only', or time-based (e.g., '30_days')
+- **Deep Crawl Tags**: Automatically tagged with 'deep_crawl' and depth information

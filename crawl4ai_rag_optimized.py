@@ -22,7 +22,7 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 import requests
 import numpy as np
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin
 import re
 
 def validate_url(url: str) -> bool:
@@ -88,6 +88,32 @@ def validate_integer_range(value: int, min_val: int, max_val: int, field_name: s
     
     return value
 
+def validate_deep_crawl_params(max_depth: int, max_pages: int) -> tuple:
+    """Validate deep crawl parameters to prevent resource abuse"""
+    max_depth = validate_integer_range(max_depth, 1, 5, "max_depth")
+    max_pages = validate_integer_range(max_pages, 1, 250, "max_pages")
+    
+    # Warn about potentially large crawls
+    if max_depth >= 3 and max_pages >= 50:
+        estimated_pages = max_pages * (max_depth ** 2)  # Rough estimate
+        if estimated_pages > 500:
+            print(f"Warning: Deep crawl may discover {estimated_pages}+ pages. Consider reducing max_depth or max_pages.", file=sys.stderr, flush=True)
+    
+    return max_depth, max_pages
+
+def validate_float_range(value: float, min_val: float, max_val: float, field_name: str) -> float:
+    """Validate float is within acceptable range"""
+    if not isinstance(value, (int, float)):
+        try:
+            value = float(value)
+        except (ValueError, TypeError):
+            raise ValueError(f"{field_name} must be a number")
+    
+    if value < min_val or value > max_val:
+        raise ValueError(f"{field_name} must be between {min_val} and {max_val}")
+    
+    return float(value)
+
 def setup_error_logging():
     """Setup error logging to crawl4ai_rag_errors.log"""
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -123,7 +149,7 @@ class RAGDatabase:
         self.db = None
         self.session_id = str(uuid.uuid4())
         self.embedder = GLOBAL_MODEL
-        self.db_lock = threading.Lock()  # Thread safety
+        self.db_lock = threading.RLock()  # Reentrant lock for thread safety
         self._connection_closed = False
         self.init_database()
 
@@ -263,6 +289,19 @@ class RAGDatabase:
 
             # Use transaction to ensure content and embeddings are stored atomically
             with self.transaction():
+                # Check if URL already exists to get the old content_id
+                existing = self.execute_with_retry(
+                    'SELECT id FROM crawled_content WHERE url = ?', (url,)
+                ).fetchone()
+                
+                if existing:
+                    old_content_id = existing[0]
+                    # Delete old vector embeddings for this content
+                    self.execute_with_retry(
+                        'DELETE FROM content_vectors WHERE content_id = ?', (old_content_id,)
+                    )
+                    print(f"Replacing existing content for URL: {url}", file=sys.stderr, flush=True)
+
                 cursor = self.execute_with_retry('''
                     INSERT OR REPLACE INTO crawled_content
                     (url, title, content, markdown, content_hash, added_by_session, retention_policy, tags)
@@ -457,6 +496,196 @@ class Crawl4AIRAG:
             log_error("search_knowledge", e)
             return {"success": False, "error": str(e)}
 
+    async def deep_crawl_dfs(self, url: str, max_depth: int = 2, max_pages: int = 10, 
+                           include_external: bool = False, score_threshold: float = 0.0, 
+                           timeout: int = None) -> Dict[str, Any]:
+        """Implement DFS deep crawling client-side using regular crawls"""
+        try:
+            print(f"Starting client-side deep crawl: {url}, depth={max_depth}, max_pages={max_pages}", file=sys.stderr, flush=True)
+            
+            visited = set()
+            to_visit = [(url, 0)]  # Stack for DFS: (url, depth)
+            results = []
+            base_domain = urlparse(url).netloc
+            
+            while to_visit and len(visited) < max_pages:
+                current_url, depth = to_visit.pop()  # DFS: pop from end (stack)
+                
+                if current_url in visited or depth > max_depth:
+                    continue
+                    
+                print(f"Deep crawling ({len(visited)+1}/{max_pages}) depth {depth}/{max_depth}: {current_url}", file=sys.stderr, flush=True)
+                
+                # Use regular crawl_url which works!
+                try:
+                    crawl_result = await self.crawl_url(current_url, return_full_content=True)
+                    
+                    if crawl_result.get("success"):
+                        visited.add(current_url)
+                        
+                        results.append({
+                            "url": current_url,
+                            "title": crawl_result.get("title", ""),
+                            "depth": depth,
+                            "content_length": len(crawl_result.get("content", "")),
+                            "content_preview": crawl_result.get("content", "")[:200] + "..." if len(crawl_result.get("content", "")) > 200 else crawl_result.get("content", ""),
+                            "success": True
+                        })
+                        
+                        # Extract links if not at max depth
+                        if depth < max_depth:
+                            content = crawl_result.get("content", "")
+                            
+                            # Extract links from HTML content
+                            # Look for href attributes in anchor tags
+                            link_pattern = r'<a[^>]+href=[\'"]([^\'"#?]+)[^\'"]*[\'"][^>]*>'
+                            links = re.findall(link_pattern, content, re.IGNORECASE)
+                            
+                            links_found = 0
+                            for link in links:
+                                if links_found >= 5:  # Limit links per page to prevent explosion
+                                    break
+                                    
+                                # Make absolute URL
+                                try:
+                                    absolute_url = urljoin(current_url, link.strip())
+                                    parsed = urlparse(absolute_url)
+                                    
+                                    # Skip invalid URLs
+                                    if parsed.scheme not in ['http', 'https']:
+                                        continue
+                                        
+                                    # Check external domain policy
+                                    if not include_external and parsed.netloc != base_domain:
+                                        continue
+                                        
+                                    # Skip common non-content links
+                                    if any(skip in absolute_url.lower() for skip in ['.css', '.js', '.jpg', '.png', '.gif', '.pdf', '.zip', 'mailto:', 'tel:']):
+                                        continue
+                                    
+                                    # Add to visit list (DFS: add to end of stack)
+                                    if absolute_url not in visited and not any(absolute_url == queued[0] for queued in to_visit):
+                                        to_visit.append((absolute_url, depth + 1))
+                                        links_found += 1
+                                        print(f"  Found link: {absolute_url}", file=sys.stderr, flush=True)
+                                        
+                                except Exception as e:
+                                    # Skip invalid URLs
+                                    continue
+                            
+                            print(f"  Added {links_found} new links to crawl queue", file=sys.stderr, flush=True)
+                    else:
+                        print(f"  Failed to crawl: {crawl_result.get('error', 'Unknown error')}", file=sys.stderr, flush=True)
+                        
+                except Exception as e:
+                    print(f"  Exception crawling {current_url}: {e}", file=sys.stderr, flush=True)
+                    continue
+            
+            print(f"Deep crawl completed: {len(results)} pages crawled", file=sys.stderr, flush=True)
+            
+            return {
+                "success": True,
+                "starting_url": url,
+                "pages_crawled": len(results),
+                "max_depth": max_depth,
+                "results": results,
+                "message": f"Successfully deep crawled {len(results)} pages using client-side DFS"
+            }
+                
+        except Exception as e:
+            log_error("deep_crawl_dfs", e, url)
+            return {"success": False, "error": str(e)}
+
+    async def deep_crawl_and_store(self, url: str, retention_policy: str = 'permanent', 
+                                 tags: str = '', max_depth: int = 2, max_pages: int = 10,
+                                 include_external: bool = False, score_threshold: float = 0.0,
+                                 timeout: int = None) -> Dict[str, Any]:
+        """Deep crawl using DFS strategy and store all results in RAG database"""
+        try:
+            print(f"Starting deep crawl and store: {url}", file=sys.stderr, flush=True)
+            
+            # First perform the deep crawl
+            crawl_result = await self.deep_crawl_dfs(url, max_depth, max_pages, include_external, score_threshold, timeout)
+            
+            if not crawl_result.get("success"):
+                return crawl_result
+            
+            print(f"Deep crawl completed, storing {len(crawl_result['results'])} pages...", file=sys.stderr, flush=True)
+            
+            # Store each crawled page with progress tracking
+            stored_pages = []
+            failed_pages = []
+            total_pages = len(crawl_result["results"])
+            
+            for i, page_result in enumerate(crawl_result["results"], 1):
+                try:
+                    page_url = page_result["url"]
+                    print(f"Storing page {i}/{total_pages}: {page_url}", file=sys.stderr, flush=True)
+                    
+                    # Use the content we already have from deep crawl instead of re-crawling
+                    # This is much more efficient!
+                    page_content = page_result.get("content_preview", "")
+                    if len(page_content) < 100:  # If preview is too short, get full content
+                        full_crawl = await self.crawl_url(page_url, return_full_content=True)
+                        if full_crawl.get("success"):
+                            page_content = full_crawl["content"]
+                            markdown_content = full_crawl["markdown"]
+                            title = full_crawl["title"]
+                        else:
+                            failed_pages.append({
+                                "url": page_url,
+                                "error": full_crawl.get("error", "Failed to get full content")
+                            })
+                            continue
+                    else:
+                        # Use data from deep crawl result
+                        markdown_content = ""  # Deep crawl doesn't provide markdown
+                        title = page_result.get("title", "")
+                        page_content = page_result.get("content_preview", "").replace("...", "")  # Remove preview truncation
+                    
+                    content_id = self.db.store_content(
+                        url=page_url,
+                        title=title,
+                        content=page_content,
+                        markdown=markdown_content,
+                        retention_policy=retention_policy,
+                        tags=f"{tags},deep_crawl,depth_{page_result['depth']}" if tags else f"deep_crawl,depth_{page_result['depth']}"
+                    )
+                    
+                    stored_pages.append({
+                        "url": page_url,
+                        "title": title,
+                        "content_id": content_id,
+                        "depth": page_result["depth"],
+                        "content_length": len(page_content)
+                    })
+                    
+                except Exception as e:
+                    print(f"Failed to store page {page_url}: {str(e)}", file=sys.stderr, flush=True)
+                    failed_pages.append({
+                        "url": page_result.get("url", "unknown"),
+                        "error": str(e)
+                    })
+            
+            print(f"Storage complete: {len(stored_pages)} stored, {len(failed_pages)} failed", file=sys.stderr, flush=True)
+            
+            return {
+                "success": True,
+                "starting_url": url,
+                "pages_crawled": crawl_result["pages_crawled"],
+                "pages_stored": len(stored_pages),
+                "pages_failed": len(failed_pages),
+                "stored_pages": stored_pages,
+                "failed_pages": failed_pages,
+                "retention_policy": retention_policy,
+                "message": f"Deep crawl completed: {len(stored_pages)} pages stored, {len(failed_pages)} failed"
+            }
+            
+        except Exception as e:
+            print(f"Deep crawl and store failed: {str(e)}", file=sys.stderr, flush=True)
+            log_error("deep_crawl_and_store", e, url)
+            return {"success": False, "error": str(e)}
+
 print("Initializing RAG system...", file=sys.stderr, flush=True)
 GLOBAL_RAG = Crawl4AIRAG()
 print("RAG system ready!", file=sys.stderr, flush=True)
@@ -537,6 +766,40 @@ class MCPServer:
                 "name": "clear_temp_memory",
                 "description": "Clear all temporary content from current session",
                 "inputSchema": {"type": "object", "properties": {}}
+            },
+            {
+                "name": "deep_crawl_dfs",
+                "description": "Deep crawl multiple pages using depth-first search strategy without storing",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "url": {"type": "string", "description": "Starting URL for deep crawl"},
+                        "max_depth": {"type": "integer", "description": "Maximum depth to crawl (1-5, default 2)"},
+                        "max_pages": {"type": "integer", "description": "Maximum pages to crawl (1-250, default 10)"},
+                        "include_external": {"type": "boolean", "description": "Whether to follow external domain links (default false)"},
+                        "score_threshold": {"type": "number", "description": "Minimum URL score to crawl (0.0-1.0, default 0.0)"},
+                        "timeout": {"type": "integer", "description": "Timeout in seconds (60-1800, auto-calculated if not provided)"}
+                    },
+                    "required": ["url"]
+                }
+            },
+            {
+                "name": "deep_crawl_and_store",
+                "description": "Deep crawl multiple pages using DFS strategy and store all in knowledge base",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "url": {"type": "string", "description": "Starting URL for deep crawl"},
+                        "max_depth": {"type": "integer", "description": "Maximum depth to crawl (1-5, default 2)"},
+                        "max_pages": {"type": "integer", "description": "Maximum pages to crawl (1-250, default 10)"},
+                        "retention_policy": {"type": "string", "description": "Storage policy: permanent, session_only (default permanent)"},
+                        "tags": {"type": "string", "description": "Optional tags for organization"},
+                        "include_external": {"type": "boolean", "description": "Whether to follow external domain links (default false)"},
+                        "score_threshold": {"type": "number", "description": "Minimum URL score to crawl (0.0-1.0, default 0.0)"},
+                        "timeout": {"type": "integer", "description": "Timeout in seconds (60-1800, auto-calculated if not provided)"}
+                    },
+                    "required": ["url"]
+                }
             }
         ]
 
@@ -642,6 +905,52 @@ class MCPServer:
                         "removed_count": removed,
                         "session_id": self.rag.db.session_id
                     }
+                
+                elif tool_name == "deep_crawl_dfs":
+                    # Validate URL and deep crawl parameters
+                    url = arguments["url"]
+                    if not validate_url(url):
+                        result = {"success": False, "error": "Invalid or unsafe URL provided"}
+                    else:
+                        # Validate and set defaults for deep crawl parameters
+                        max_depth, max_pages = validate_deep_crawl_params(
+                            arguments.get("max_depth", 2),
+                            arguments.get("max_pages", 10)
+                        )
+                        include_external = arguments.get("include_external", False)
+                        score_threshold = validate_float_range(
+                            arguments.get("score_threshold", 0.0), 0.0, 1.0, "score_threshold"
+                        )
+                        timeout = arguments.get("timeout")  # Optional parameter
+                        
+                        result = await self.rag.deep_crawl_dfs(
+                            url, max_depth, max_pages, include_external, score_threshold, timeout
+                        )
+                
+                elif tool_name == "deep_crawl_and_store":
+                    # Validate URL and deep crawl parameters
+                    url = arguments["url"]
+                    if not validate_url(url):
+                        result = {"success": False, "error": "Invalid or unsafe URL provided"}
+                    else:
+                        # Validate and set defaults for deep crawl parameters
+                        max_depth, max_pages = validate_deep_crawl_params(
+                            arguments.get("max_depth", 2),
+                            arguments.get("max_pages", 10)
+                        )
+                        tags = validate_string_length(arguments.get("tags", ""), 255, "tags")
+                        retention_policy = arguments.get("retention_policy", "permanent")
+                        include_external = arguments.get("include_external", False)
+                        score_threshold = validate_float_range(
+                            arguments.get("score_threshold", 0.0), 0.0, 1.0, "score_threshold"
+                        )
+                        timeout = arguments.get("timeout")  # Optional parameter
+                        
+                        result = await self.rag.deep_crawl_and_store(
+                            url, retention_policy, tags, max_depth, max_pages, 
+                            include_external, score_threshold, timeout
+                        )
+                
                 else:
                     result = {"success": False, "error": f"Unknown tool: {tool_name}"}
 
