@@ -1,0 +1,30 @@
+# Crawl4AI Batch Domain List
+# One domain per line, lines starting with # are comments
+# Protocol (https://) is optional and will be added automatically
+
+# AI/ML Documentation sites
+https://docs.vllm.ai/en/latest/
+https://pytorch.org/docs/stable/
+https://huggingface.co/docs
+
+# JavaScript/Node.js Documentation
+https://nodejs.org/en/docs
+https://docs.npmjs.com/
+https://eslint.org/docs/latest/
+https://www.typescriptlang.org/tsconfig/
+
+# .NET Documentation
+https://learn.microsoft.com/en-us/ef/core/
+
+# HTTP/Build Tools Documentation  
+https://axios-http.com/docs/intro
+https://vite.dev/guide/
+
+# Crawling/Development Tools
+https://docs.crawl4ai.com/
+https://lmstudio.ai/docs/welcome
+
+# Framework sites  
+https://www.electronjs.org/
+https://reactjs.org/docs/
+https://vuejs.org/guide/

@@ -144,7 +144,13 @@ from sentence_transformers import SentenceTransformer
 GLOBAL_MODEL = SentenceTransformer('all-MiniLM-L6-v2')
 
 class RAGDatabase:
-    def __init__(self, db_path: str = "crawl4ai_rag.db"):
+    def __init__(self, db_path: str = None):
+        if db_path is None:
+            # Check if running in Docker (data directory exists)
+            if os.path.exists("/app/data"):
+                db_path = "/app/data/crawl4ai_rag.db"
+            else:
+                db_path = "crawl4ai_rag.db"
         self.db_path = db_path
         self.db = None
         self.session_id = str(uuid.uuid4())
@@ -411,7 +417,7 @@ class RAGDatabase:
 
 class Crawl4AIRAG:
     def __init__(self):
-        self.crawl4ai_url = "http://localhost:11235"
+        self.crawl4ai_url = "http://crawl4ai:11235"
         self.db = RAGDatabase()
 
     async def crawl_url(self, url: str, return_full_content: bool = False) -> Dict[str, Any]:
