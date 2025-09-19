@@ -417,7 +417,7 @@ class RAGDatabase:
 
 class Crawl4AIRAG:
     def __init__(self):
-        self.crawl4ai_url = "http://crawl4ai:11235"
+        self.crawl4ai_url = "http://localhost:11235"
         self.db = RAGDatabase()
 
     async def crawl_url(self, url: str, return_full_content: bool = False) -> Dict[str, Any]:
