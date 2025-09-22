@@ -2,3 +2,4 @@ __pycache__
 notes.txt
 /oldVersions
 .claude
+.crawl4ai_rag.db

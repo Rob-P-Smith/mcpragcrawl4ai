@@ -119,14 +119,20 @@ print(f'✓ Embeddings generated: {embeddings.shape}')
 
 ## Step 7: Add RAG Server Script
 
-Create the main RAG server script. Copy the complete `crawl4ai_rag_optimized.py` script to your home directory and make it executable:
+Create the main RAG server script. The original `crawl4ai_rag_optimized.py` has been split into three separate files for better organization:
+
+1. **operations/crawler.py** - Contains all web crawling logic
+2. **data/storage.py** - Handles database interactions and content storage
+3. **core/rag_processor.py** - Manages the MCP server interface and request handling
+
+Copy these three files to your project directory and make them executable:
 
 ```bash
-# Make script executable
-chmod +x crawl4ai_rag_optimized.py
+# Make scripts executable
+chmod +x operations/crawler.py data/storage.py core/rag_processor.py
 
 # Test script initialization
-python crawl4ai_rag_optimized.py &
+python3 core/rag_processor.py &
 SCRIPT_PID=$!
 sleep 5
 kill $SCRIPT_PID
@@ -142,13 +148,13 @@ Test the MCP server with manual JSON-RPC calls:
 
 ```bash
 # Test tools listing
-echo '{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}' | python crawl4ai_rag_optimized.py
+echo '{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}' | python3 core/rag_processor.py
 
 # Test crawling and storing
-echo '{"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "crawl_and_remember", "arguments": {"url": "https://httpbin.org/html"}}}' | python crawl4ai_rag_optimized.py
+echo '{"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "crawl_and_remember", "arguments": {"url": "https://httpbin.org/html"}}}' | python3 core/rag_processor.py
 
 # Test search functionality
-echo '{"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "search_memory", "arguments": {"query": "test content"}}}' | python crawl4ai_rag_optimized.py
+echo '{"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "search_memory", "arguments": {"query": "test content"}}}' | python3 core/rag_processor.py
 ```
 
 ## Step 9: Configure LM-Studio MCP
@@ -158,7 +164,7 @@ Update LM-Studio's MCP configuration file:
 ```bash
 # Get the full paths
 VENV_PATH=$(pwd)/crawl4ai_rag_env
-SCRIPT_PATH=$(pwd)/crawl4ai_rag_optimized.py
+SCRIPT_PATH=$(pwd)/core/rag_processor.py
 
 echo "Virtual Environment: $VENV_PATH"
 echo "Script Path: $SCRIPT_PATH"
@@ -173,7 +179,7 @@ In LM-Studio, go to **Program → View MCP Configuration** and update `mcp.json`
   "mcpServers": {
     "crawl4ai-rag": {
       "command": "/home/YOUR_USERNAME/crawl4ai_rag_env/bin/python",
-      "args": ["/home/YOUR_USERNAME/crawl4ai_rag_optimized.py"],
+      "args": ["/home/YOUR_USERNAME/core/rag_processor.py"],
       "env": {
         "PYTHONPATH": "/home/YOUR_USERNAME/crawl4ai_rag_env/lib/python3.11/site-packages"
       }
@@ -189,7 +195,7 @@ In LM-Studio, go to **Program → View MCP Configuration** and update `mcp.json`
   "mcpServers": {
     "crawl4ai-rag": {
       "command": "/home/robiloo/crawl4ai_rag_env/bin/python3",
-      "args": ["/home/robiloo/crawl4ai_rag_optimized.py"]
+      "args": ["/home/robiloo/core/rag_processor.py"]
     }
   }
 }
@@ -344,7 +350,7 @@ pip list | grep -E "(sentence|sqlite|numpy|requests)"
 
 # API Documentation
 
-## RAGDatabase Class
+## RAGDatabase Class (data/storage.py)
 
 ### `__init__(self, db_path: str = "crawl4ai_rag.db")`
 
@@ -432,7 +438,7 @@ pip list | grep -E "(sentence|sqlite|numpy|requests)"
   **Returns:** Number of items removed
   **Functionality:** Deletes content based on URL or session criteria
 
-## Crawl4AIRAG Class
+## Crawl4AIRAG Class (operations/crawler.py)
 
 ### `__init__(self)`
 
@@ -501,7 +507,7 @@ pip list | grep -E "(sentence|sqlite|numpy|requests)"
   **Returns:** Dictionary with storage results, success/failure counts, and stored page summaries
   **Functionality:** Performs deep crawl then stores all discovered content with embeddings
 
-## MCPServer Class
+## MCPServer Class (core/rag_processor.py)
 
 ### `__init__(self)`
 

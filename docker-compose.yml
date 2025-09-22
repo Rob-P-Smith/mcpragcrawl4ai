@@ -26,10 +26,9 @@ services:
     ports:
       - "8765:8765"
     volumes:
-      # Only mount data directory for database persistence
       - ./data:/app/data
     environment:
-      - CRAWL4AI_URL=http://crawl4ai:11235  # Internal container communication
+      - CRAWL4AI_URL=http://crawl4ai:11235
       - MCP_HOST=0.0.0.0
       - MCP_PORT=8765
     restart: unless-stopped
@@ -43,6 +42,5 @@ networks:
   crawl4ai_network:
     driver: bridge
 
-# Optional: Named volume for production data persistence
 volumes:
   mcp_data:
