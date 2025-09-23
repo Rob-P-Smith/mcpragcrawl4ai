@@ -1,16 +1,35 @@
 """
 Core RAG processor for Crawl4AI system
 Manages the MCP server interface, tool definitions, and request handling
+Supports both local and remote (client mode) operation
 """
 
+import os
+import sys
 import asyncio
 import json
 from typing import Dict, Any
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 from operations.crawler import Crawl4AIRAG
 from data.storage import GLOBAL_DB, log_error
 
-GLOBAL_RAG = Crawl4AIRAG()
+# Check if running in client mode
+IS_CLIENT_MODE = os.getenv("IS_SERVER", "true").lower() == "false"
+
+# Initialize based on mode
+if IS_CLIENT_MODE:
+    # Import API client for remote calls
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from api.api import api_client
+    GLOBAL_RAG = None
+    print("🔗 Running in CLIENT mode - API calls will be forwarded to remote server", file=sys.stderr, flush=True)
+else:
+    GLOBAL_RAG = Crawl4AIRAG()
+    print("🏠 Running in SERVER mode - using local RAG system", file=sys.stderr, flush=True)
 
 class MCPServer:
     def __init__(self):
@@ -162,7 +181,11 @@ class MCPServer:
                     if not validate_url(url):
                         result = {"success": False, "error": "Invalid or unsafe URL provided"}
                     else:
-                        result = await self.rag.crawl_url(url)
+                        if IS_CLIENT_MODE:
+                            api_result = await api_client.crawl_url(url)
+                            result = api_result.get("data", api_result)
+                        else:
+                            result = await self.rag.crawl_url(url)
                 
                 elif tool_name == "crawl_and_remember":
                     url = arguments["url"]
@@ -170,11 +193,15 @@ class MCPServer:
                         result = {"success": False, "error": "Invalid or unsafe URL provided"}
                     else:
                         tags = validate_string_length(arguments.get("tags", ""), 255, "tags")
-                        result = await self.rag.crawl_and_store(
-                            url,
-                            retention_policy='permanent',
-                            tags=tags
-                        )
+                        if IS_CLIENT_MODE:
+                            api_result = await api_client.crawl_and_store(url, tags, 'permanent')
+                            result = api_result.get("data", api_result)
+                        else:
+                            result = await self.rag.crawl_and_store(
+                                url,
+                                retention_policy='permanent',
+                                tags=tags
+                            )
                 
                 elif tool_name == "crawl_temp":
                     url = arguments["url"]
@@ -182,45 +209,65 @@ class MCPServer:
                         result = {"success": False, "error": "Invalid or unsafe URL provided"}
                     else:
                         tags = validate_string_length(arguments.get("tags", ""), 255, "tags")
-                        result = await self.rag.crawl_and_store(
-                            url,
-                            retention_policy='session_only',
-                            tags=tags
-                        )
+                        if IS_CLIENT_MODE:
+                            api_result = await api_client.crawl_temp(url, tags)
+                            result = api_result.get("data", api_result)
+                        else:
+                            result = await self.rag.crawl_and_store(
+                                url,
+                                retention_policy='session_only',
+                                tags=tags
+                            )
                 
                 elif tool_name == "search_memory":
                     query = validate_string_length(arguments["query"], 500, "query")
                     limit = validate_integer_range(arguments.get("limit", 5), 1, 1000, "limit")
-                    result = await self.rag.search_knowledge(query, limit)
+                    if IS_CLIENT_MODE:
+                        api_result = await api_client.search_knowledge(query, limit)
+                        result = api_result.get("data", api_result)
+                    else:
+                        result = await self.rag.search_knowledge(query, limit)
                 
                 elif tool_name == "list_memory":
                     filter_param = arguments.get("filter")
                     if filter_param:
                         filter_param = validate_string_length(filter_param, 500, "filter")
-                    result = {
-                        "success": True,
-                        "content": GLOBAL_DB.list_content(filter_param)
-                    }
+                    if IS_CLIENT_MODE:
+                        api_result = await api_client.list_memory(filter_param)
+                        result = api_result.get("data", api_result)
+                    else:
+                        result = {
+                            "success": True,
+                            "content": GLOBAL_DB.list_content(filter_param)
+                        }
                 
                 elif tool_name == "forget_url":
                     url = arguments["url"]
                     if not validate_url(url):
                         result = {"success": False, "error": "Invalid or unsafe URL provided"}
                     else:
-                        removed = GLOBAL_DB.remove_content(url=url)
+                        if IS_CLIENT_MODE:
+                            api_result = await api_client.forget_url(url)
+                            result = api_result.get("data", api_result)
+                        else:
+                            removed = GLOBAL_DB.remove_content(url=url)
+                            result = {
+                                "success": True,
+                                "removed_count": removed,
+                                "url": url
+                            }
+                
+                elif tool_name == "clear_temp_memory":
+                    if IS_CLIENT_MODE:
+                        api_result = await api_client.clear_temp_memory()
+                        result = api_result.get("data", api_result)
+                    else:
+                        removed = GLOBAL_DB.remove_content(session_only=True)
                         result = {
                             "success": True,
                             "removed_count": removed,
-                            "url": url
+                            "session_id": GLOBAL_DB.session_id
                         }
-                
-                elif tool_name == "clear_temp_memory":
-                    removed = GLOBAL_DB.remove_content(session_only=True)
-                    result = {
-                        "success": True,
-                        "removed_count": removed,
-                        "session_id": GLOBAL_DB.session_id
-                    }
                 
                 elif tool_name == "deep_crawl_dfs":
                     url = arguments["url"]
@@ -236,10 +283,16 @@ class MCPServer:
                             arguments.get("score_threshold", 0.0), 0.0, 1.0, "score_threshold"
                         )
                         timeout = arguments.get("timeout")
-                        
-                        result = await self.rag.deep_crawl_dfs(
-                            url, max_depth, max_pages, include_external, score_threshold, timeout
-                        )
+
+                        if IS_CLIENT_MODE:
+                            api_result = await api_client.deep_crawl_dfs(
+                                url, max_depth, max_pages, include_external, score_threshold, timeout
+                            )
+                            result = api_result.get("data", api_result)
+                        else:
+                            result = await self.rag.deep_crawl_dfs(
+                                url, max_depth, max_pages, include_external, score_threshold, timeout
+                            )
                 
                 elif tool_name == "deep_crawl_and_store":
                     url = arguments["url"]
@@ -257,11 +310,18 @@ class MCPServer:
                             arguments.get("score_threshold", 0.0), 0.0, 1.0, "score_threshold"
                         )
                         timeout = arguments.get("timeout")
-                        
-                        result = await self.rag.deep_crawl_and_store(
-                            url, retention_policy, tags, max_depth, max_pages, 
-                            include_external, score_threshold, timeout
-                        )
+
+                        if IS_CLIENT_MODE:
+                            api_result = await api_client.deep_crawl_and_store(
+                                url, retention_policy, tags, max_depth, max_pages,
+                                include_external, score_threshold, timeout
+                            )
+                            result = api_result.get("data", api_result)
+                        else:
+                            result = await self.rag.deep_crawl_and_store(
+                                url, retention_policy, tags, max_depth, max_pages,
+                                include_external, score_threshold, timeout
+                            )
                 
                 else:
                     result = {"success": False, "error": f"Unknown tool: {tool_name}"}

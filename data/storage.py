@@ -6,10 +6,14 @@ Handles all database interactions, content storage, and retrieval
 import sqlite3
 import sqlite_vec
 import os
+import sys
+import time
 import hashlib
 import uuid
 import traceback
 import logging
+import threading
+import numpy as np
 from contextlib import contextmanager
 from datetime import datetime
 from typing import List, Dict, Any, Optional
