@@ -18,7 +18,6 @@ def get_db_stats(db_path="crawl4ai_rag.db"):
     try:
         conn = sqlite3.connect(db_path)
         
-        # Try to load sqlite-vec extension
         try:
             import sqlite_vec
             conn.enable_load_extension(True)
@@ -36,7 +35,6 @@ def get_db_stats(db_path="crawl4ai_rag.db"):
         # Basic counts
         pages = conn.execute('SELECT COUNT(*) FROM crawled_content').fetchone()[0]
         
-        # Try to get embedding count, fallback if vec0 not available
         if vec_available:
             try:
                 embeddings = conn.execute('SELECT COUNT(*) FROM content_vectors').fetchone()[0]
@@ -51,14 +49,12 @@ def get_db_stats(db_path="crawl4ai_rag.db"):
         print(f"🧠 Vector Embeddings: {embeddings}")
         print(f"👥 Sessions: {sessions:,}")
         
-        # Database size
         size_result = conn.execute('SELECT page_count * page_size FROM pragma_page_count(), pragma_page_size()').fetchone()
         if size_result:
             size_bytes = size_result[0]
             size_mb = size_bytes / 1024 / 1024
             print(f"💾 Database Size: {size_mb:.2f} MB ({size_bytes:,} bytes)")
         
-        # Records by retention policy
         print("\n📋 RECORDS BY RETENTION POLICY:")
         retention_stats = conn.execute('''
             SELECT retention_policy, COUNT(*) as count 
@@ -70,7 +66,6 @@ def get_db_stats(db_path="crawl4ai_rag.db"):
         for policy, count in retention_stats:
             print(f"   {policy}: {count:,} pages")
         
-        # Recent activity
         print("\n🕒 RECENT ACTIVITY (Last 10 pages):")
         recent = conn.execute('''
             SELECT url, title, timestamp, 
@@ -83,7 +78,6 @@ def get_db_stats(db_path="crawl4ai_rag.db"):
         
         if recent:
             for url, title, timestamp, size, policy in recent:
-                # Truncate long titles and URLs
                 display_title = (title[:40] + "...") if title and len(title) > 40 else (title or "No title")
                 display_url = (url[:50] + "...") if len(url) > 50 else url
                 size_kb = size / 1024 if size else 0
@@ -95,14 +89,12 @@ def get_db_stats(db_path="crawl4ai_rag.db"):
         else:
             print("   No pages found")
         
-        # Storage breakdown
         print("📊 STORAGE BREAKDOWN:")
         content_size = conn.execute('''
             SELECT SUM(LENGTH(content) + LENGTH(COALESCE(markdown, '')) + LENGTH(COALESCE(title, ''))) 
             FROM crawled_content
         ''').fetchone()[0] or 0
         
-        # Approximate embedding size (384 dimensions * 4 bytes per float * number of embeddings)
         if isinstance(embeddings, int):
             embedding_size = embeddings * 384 * 4
         else:
@@ -115,7 +107,6 @@ def get_db_stats(db_path="crawl4ai_rag.db"):
         print(f"   🧠 Embeddings: {embedding_mb:.2f} MB")
         print(f"   🗂️ Metadata/Other: {(size_mb - content_mb - embedding_mb):.2f} MB")
         
-        # Tags analysis if any pages have tags
         tags_result = conn.execute('''
             SELECT tags, COUNT(*) as count 
             FROM crawled_content 

@@ -60,9 +60,3 @@ All error responses follow a consistent format:
   "code": "error_code"
 }
 ```
-
-Common error codes include:
-- `401`: Unauthorized (invalid or missing API key)
-- `403`: Forbidden (insufficient permissions)
-- `429`: Too many requests (rate limit exceeded)
-- `500`: Internal server error

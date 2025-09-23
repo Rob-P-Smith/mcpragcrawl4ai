@@ -1,9 +1,3 @@
-"""
-Core RAG processor for Crawl4AI system
-Manages the MCP server interface, tool definitions, and request handling
-Supports both local and remote (client mode) operation
-"""
-
 import os
 import sys
 import asyncio
@@ -11,18 +5,14 @@ import json
 from typing import Dict, Any
 from dotenv import load_dotenv
 
-# Load environment variables
 load_dotenv()
 
 from operations.crawler import Crawl4AIRAG
 from data.storage import GLOBAL_DB, log_error
 
-# Check if running in client mode
 IS_CLIENT_MODE = os.getenv("IS_SERVER", "true").lower() == "false"
 
-# Initialize based on mode
 if IS_CLIENT_MODE:
-    # Import API client for remote calls
     sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from api.api import api_client
     GLOBAL_RAG = None

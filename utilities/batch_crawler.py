@@ -35,7 +35,6 @@ class BatchCrawler:
                 for line_num, line in enumerate(f, 1):
                     line = line.strip()
                     if line and not line.startswith('#'):
-                        # Add https:// if not present
                         if not line.startswith(('http://', 'https://')):
                             line = 'https://' + line
                         domains.append(line)
@@ -61,15 +60,14 @@ class BatchCrawler:
         start_time = time.time()
         
         try:
-            # Use deep_crawl_and_store to save all pages
             result = await self.rag.deep_crawl_and_store(
                 url=domain,
                 retention_policy='permanent',
                 tags=f'batch_crawl,domain_{index}',
                 max_depth=self.max_depth,
                 max_pages=self.max_pages,
-                include_external=False,  # Stay within domain
-                timeout=1800  # 30 minute timeout per domain
+                include_external=False,
+                timeout=1800
             )
             
             end_time = time.time()
@@ -126,7 +124,6 @@ class BatchCrawler:
                 'error': str(e)
             })
         
-        # Brief pause between domains
         print(f"\n⏸️  Waiting 5 seconds before next domain...")
         await asyncio.sleep(5)
     
@@ -143,14 +140,12 @@ class BatchCrawler:
         
         batch_start_time = time.time()
         
-        # Crawl domains serially (one at a time)
         for index, domain in enumerate(domains, 1):
             await self.crawl_domain(domain, index, len(domains))
         
         batch_end_time = time.time()
         batch_duration = batch_end_time - batch_start_time
         
-        # Print final summary
         self.print_summary(batch_duration)
     
     def print_summary(self, batch_duration):
@@ -191,7 +186,6 @@ async def main():
     else:
         domains_file = "domains.txt"
     
-    # Parse command line arguments for depth and pages
     max_depth = 4
     max_pages = 250
     

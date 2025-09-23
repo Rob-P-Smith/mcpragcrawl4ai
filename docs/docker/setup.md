@@ -12,7 +12,6 @@ This document provides detailed instructions for setting up the RAG system using
 
 ### docker-compose.yml
 ```yaml
-version: '3.8'
 services:
   crawl4ai:
     image: unclecode/crawl4ai:latest
