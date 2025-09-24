@@ -167,17 +167,6 @@ sudo certbot renew --dry-run
 sudo nginx -t
 ```
 
-### Cloud Deployment (AWS)
-
-1. **EC2 instance not accessible**:
-   - Verify security group rules allow SSH access from your IP
-   - Check that the EC2 instance has a public IP address
-   - Verify the key pair file is correct and has proper permissions
-
-2. **EBS volume attachment issues**:
-   - Ensure the EBS volume is in the same availability zone as the EC2 instance
-   - Check that the volume is not already attached to another instance
-   - Verify the device name (e.g., /dev/sdf) matches the configuration
 
 ### Kubernetes Deployment
 
