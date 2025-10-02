@@ -4,14 +4,18 @@ A complete guide to setting up a Retrieval-Augmented Generation (RAG) system usi
 
 ## Prerequisites
 
-- Ubuntu/Linux system
+- Ubuntu/Linux system or other Linux distribution
 - Docker and docker-compose installed
 - Python 3.8 or higher
 - LM-Studio installed
 - At least 4GB RAM available
 - 10GB free disk space
 
-## Step 1: Setup Docker Container
+## Homelab Setup Guide
+
+This system is designed for local homelab deployment. It can run entirely on your personal computer or home server without requiring cloud infrastructure.
+
+### Step 1: Setup Docker Container
 
 Create the Docker configuration for Crawl4AI:
 
@@ -42,7 +46,7 @@ docker-compose up -d
 docker-compose ps
 ```
 
-## Step 2: Test Docker Container
+### Step 2: Test Docker Container
 
 Verify the Crawl4AI container is working:
 
@@ -61,7 +65,7 @@ curl -X POST http://localhost:11235/crawl \
 
 Expected response should include `"success": true` and crawled content.
 
-## Step 3: Create Python Virtual Environment
+### Step 3: Create Python Virtual Environment
 
 ```bash
 # Create virtual environment
@@ -74,7 +78,7 @@ source crawl4ai_rag_env/bin/activate
 pip install --upgrade pip
 ```
 
-## Step 4: Install Dependencies
+### Step 4: Install Dependencies
 
 Install all required Python packages:
 
@@ -91,7 +95,7 @@ pip install transformers==4.56.1
 pip install huggingface-hub
 ```
 
-## Step 5: Test sqlite-vec Installation
+### Step 5: Test sqlite-vec Installation
 
 Run the test script to verify sqlite-vec is working:
 
@@ -101,7 +105,7 @@ Run the test script to verify sqlite-vec is working:
 python test_sqlite_vec.py
 ```
 
-## Step 6: Test Sentence Transformers
+### Step 6: Test Sentence Transformers
 
 Verify the sentence transformer model loads correctly:
 
@@ -117,7 +121,7 @@ print(f'✓ Embeddings generated: {embeddings.shape}')
 "
 ```
 
-## Step 7: Add RAG Server Script
+### Step 7: Add RAG Server Script
 
 Create the main RAG server script. The original `crawl4ai_rag_optimized.py` has been split into three separate files for better organization:
 
@@ -142,7 +146,7 @@ kill $SCRIPT_PID
 # RAG system ready!
 ```
 
-## Step 8: Test RAG Server Manually
+### Step 8: Test RAG Server Manually
 
 Test the MCP server with manual JSON-RPC calls:
 
@@ -157,7 +161,7 @@ echo '{"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "cr
 echo '{"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "search_memory", "arguments": {"query": "test content"}}}' | python3 core/rag_processor.py
 ```
 
-## Step 9: Configure LM-Studio MCP
+### Step 9: Configure LM-Studio MCP
 
 Update LM-Studio's MCP configuration file:
 
@@ -203,7 +207,7 @@ In LM-Studio, go to **Program → View MCP Configuration** and update `mcp.json`
 
 Replace `YOUR_USERNAME` with your actual username and adjust Python version as needed.
 
-## Step 10: Verify LM-Studio Integration
+### Step 10: Verify LM-Studio Integration
 
 1. **Restart LM-Studio completely** (close and reopen)
 2. **Check Integrations panel** - should show `crawl4ai-rag` with blue toggle
@@ -269,6 +273,14 @@ deep_crawl_and_store with max_depth=3, max_pages=100, include_external=false
 ```
 deep_crawl_and_store with max_depth=4, max_pages=250, timeout=1200
 ```
+
+## Homelab Considerations
+
+1. **Local Network Access**: The system runs on your local network
+2. **No Cloud Costs**: Everything runs locally with no recurring fees
+3. **Security**: Configure firewall rules to restrict access to trusted devices
+4. **Backup Strategy**: Regular backups of the SQLite database directory
+5. **Resource Planning**: Ensure adequate RAM (minimum 4GB) and disk space (10GB+)
 
 ## Architecture
 

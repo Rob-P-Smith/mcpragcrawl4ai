@@ -11,6 +11,10 @@ This implementation adds a REST API layer that enables bidirectional communicati
 
 The RAG system includes advanced deep crawling capabilities using depth-first search (DFS) to automatically discover and process multiple interconnected pages.
 
+## Homelab Deployment
+
+This system is designed for local homelab deployment and can run entirely on your personal computer or home server without requiring cloud infrastructure.
+
 ## Quick Start
 
 ### 1. Install Dependencies

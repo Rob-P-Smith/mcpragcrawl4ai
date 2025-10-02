@@ -183,7 +183,11 @@ Basic health check endpoint.
 
 ## Deployment
 
-### Docker Compose
+### Local Homelab Setup
+
+This system is designed for local homelab deployment and can be run entirely on your personal computer or home server without requiring cloud infrastructure.
+
+### Docker Compose (Local Setup)
 
 ```yaml
 version: '3.8'
@@ -202,13 +206,32 @@ services:
       - crawl4ai
 ```
 
-### Production Considerations
+### Homelab Considerations
 
-1. **Use HTTPS**: Configure TLS certificates
-2. **Secure API Keys**: Use strong, randomly generated keys
-3. **Database Backup**: Regular backups of SQLite database
-4. **Monitoring**: Add Prometheus metrics and health checks
-5. **Load Balancing**: Use nginx or similar for production load balancing
+1. **Local Network Access**: The API server runs on your local network
+2. **No Cloud Costs**: Everything runs locally with no recurring fees
+3. **Security**: Configure firewall rules to restrict access to trusted devices
+4. **Backup Strategy**: Regular backups of the SQLite database directory
+5. **Resource Planning**: Ensure adequate RAM (minimum 4GB) and disk space (10GB+)
+
+### Development Setup
+
+For development purposes, you can run the API server directly on your machine:
+
+```bash
+# Install dependencies
+pip install -r requirements.txt
+
+# Run the server
+python3 start_api_server.py
+```
+
+### Security for Homelab
+
+1. **API Key Protection**: Store API keys securely in environment variables
+2. **Network Security**: Restrict access to trusted IP addresses
+3. **Regular Updates**: Keep dependencies updated for security patches
+4. **Database Access**: Ensure database files have appropriate permissions
 
 ## Development
 

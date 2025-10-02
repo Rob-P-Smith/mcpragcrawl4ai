@@ -1,9 +1,9 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Agents working with code in this repository.
 
 ## Project Overview
-This is a Crawl4AI RAG (Retrieval-Augmented Generation) MCP Server implementation that provides web crawling capabilities with semantic search and knowledge base storage. The main implementation is in `crawl4ai_rag_optimized.py`.
+This is a Crawl4AI RAG (Retrieval-Augmented Generation) MCP Server implementation that provides web crawling capabilities with semantic search and knowledge base storage. The system consists of both MCP server and REST API components.
 
 ## Key Components
 
@@ -12,12 +12,13 @@ This is a Crawl4AI RAG (Retrieval-Augmented Generation) MCP Server implementatio
 - **Crawl4AIRAG**: Web crawling interface that communicates with a local Crawl4AI service
 - **RAGDatabase**: SQLite-based vector database using sqlite-vec extension for semantic search
 - **Error Logging**: Comprehensive error logging system writing to `crawl4ai_rag_errors.log`
+- **API Gateway**: REST API layer with authentication and bidirectional communication support
 
 ### Dependencies
 - **External Service**: Requires Crawl4AI service running on `http://localhost:11235`
 - **Vector Database**: Uses sqlite-vec extension for vector similarity search
 - **ML Model**: Pre-loads SentenceTransformer 'all-MiniLM-L6-v2' for embeddings
-- **Key Libraries**: sqlite3, sqlite_vec, sentence_transformers, numpy, requests
+- **Key Libraries**: sqlite3, sqlite_vec, sentence_transformers, numpy, requests, fastapi, uvicorn
 
 ### File Structure
 - **core/rag_processor.py**: Main MCP server implementation and JSON-RPC handling
@@ -100,7 +101,7 @@ The server expects JSON-RPC 2.0 requests via stdin and responds via stdout. Erro
 ## Deep Crawling Features
 - **DFS Strategy**: Uses depth-first search to crawl multiple interconnected pages
 - **Configurable Depth**: Control how many levels deep to crawl (max 5 levels)
-- **Page Limits**: Restrict maximum pages crawled to prevent resource exhaustion (max 100 pages)
+- **Page Limits**: Restrict maximum pages crawled to prevent resource exhaustion (max 250 pages)
 - **External Links**: Option to follow or ignore external domain links
 - **URL Scoring**: Filter pages based on relevance scores (0.0-1.0 threshold)
 - **Bulk Storage**: Store all discovered pages in the knowledge base with automatic tagging
@@ -117,3 +118,9 @@ The server expects JSON-RPC 2.0 requests via stdin and responds via stdout. Erro
 - **Configuration**: Uses `.env` file to switch between local and remote operation
 - **Authentication**: API key-based authentication with rate limiting
 - **Documentation**: Auto-generated OpenAPI docs at `/docs` endpoint
+
+## Client Mode Support
+The system supports running in client mode where it forwards requests to a remote API server. This allows for distributed deployment scenarios where the MCP server runs separately from the API backend.
+
+## Batch Crawling
+The system includes a batch crawler utility that can read domains from a text file and crawl them sequentially with configurable depth and page limits. This is useful for bulk content ingestion.

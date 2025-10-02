@@ -131,6 +131,17 @@ class MCPServer:
                     },
                     "required": ["url"]
                 }
+            },
+            {
+                "name": "test_tool",
+                "description": "Test tool for debugging",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "test": {"type": "string", "description": "Test parameter"}
+                    },
+                    "required": ["test"]
+                }
             }
         ]
 
