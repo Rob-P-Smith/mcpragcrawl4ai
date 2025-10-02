@@ -123,3 +123,8 @@ timestamp|function_name|url|error_message|error_code|stack_trace
 ```
 
 All major functions include try-catch blocks with detailed error logging for debugging and monitoring.
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.js';
+  mermaid.initialize({ startOnLoad: true });
+</script>
+
