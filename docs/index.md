@@ -64,46 +64,7 @@ python3 core/rag_processor.py
 - [Troubleshooting](guides/troubleshooting.md)
 
 ## Architecture
-
-```mermaid
-graph TD
-    A[User Query in LM-Studio] --> B[MCP Protocol]
-    B --> C[RAG Server Python Script]
-    C --> D{Tool Type?}
-
-    D -->|Crawl| E[Crawl4AI Docker Container]
-    E --> F[Web Content Extraction]
-    F --> G[Content Processing & Chunking]
-    G --> H[Sentence Transformer Embeddings]
-    H --> I[SQLite + sqlite-vec Storage]
-
-    D -->|Search| J[Query Embedding Generation]
-    J --> K[Vector Similarity Search]
-    K --> L[Relevant Content Retrieval]
-
-    I --> M[Response to LM-Studio]
-    L --> M
-    M --> N[AI Model Processing]
-    N --> O[Enhanced Response to User]
-
-    subgraph "Docker Container"
-        E
-    end
-
-    subgraph "RAG Database"
-        I
-        style I fill:#e1f5fe
-    end
-
-    subgraph "Python Environment"
-        C
-        G
-        H
-        J
-        K
-        style C fill:#f3e5f5
-    end
-```
+![Architecture Diagram](Diagram.svg)
 
 ## Security Features
 
@@ -123,8 +84,4 @@ timestamp|function_name|url|error_message|error_code|stack_trace
 ```
 
 All major functions include try-catch blocks with detailed error logging for debugging and monitoring.
-<script type="module">
-  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.js';
-  mermaid.initialize({ startOnLoad: true });
-</script>
 
