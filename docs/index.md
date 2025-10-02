@@ -64,7 +64,7 @@ python3 core/rag_processor.py
 - [Troubleshooting](guides/troubleshooting.md)
 
 ## Architecture
-![Architecture Diagram](Diagram.svg)
+<img src="Diagram.svg" alt="Architecture Diagram" style="width: 50%; height: auto; display: block; margin: 0 auto;">
 
 ## Security Features
 
