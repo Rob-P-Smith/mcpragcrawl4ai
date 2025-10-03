@@ -1,21 +1,4 @@
 services:
-  crawl4ai:
-    image: unclecode/crawl4ai:latest
-    container_name: crawl4ai
-    ports:
-      - "11235:11235"
-    shm_size: "1gb"
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11235/"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-    environment:
-      - LOG_LEVEL=INFO
-    networks:
-      - crawl4ai_network
-
   api-server:
     build:
       context: ../..
@@ -30,12 +13,9 @@ services:
     environment:
       - CRAWL4AI_URL=http://crawl4ai:11235
     restart: unless-stopped
-    depends_on:
-      crawl4ai:
-        condition: service_healthy
     networks:
-      - crawl4ai_network
+      - crawler_default
 
 networks:
-  crawl4ai_network:
-    driver: bridge
+  crawler_default:
+    external: true

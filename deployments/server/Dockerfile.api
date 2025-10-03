@@ -12,7 +12,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements first for better Docker layer caching
-COPY requirements.txt .
+COPY deployments/server/requirements.txt .
 
 # Install Python dependencies
 RUN pip install --no-cache-dir --upgrade pip && \
@@ -27,10 +27,13 @@ RUN mkdir -p /app/data
 # Copy the application code
 COPY api/ ./api/
 COPY core/ ./core/
-COPY operations/ ./operations/
-COPY data/ ./data/
-COPY utilities/ ./utilities/
-COPY start_api_server.py .
+COPY core/operations/ ./operations/
+COPY core/data/ ./data/
+COPY core/utilities/ ./utilities/
+COPY deployments/server/start_api_server.py ./start_api_server.py
+
+# Ensure data directory is a proper Python module
+RUN touch /app/data/__init__.py
 
 # Create non-root user for security
 RUN useradd -m -u 1000 apiuser && \

@@ -156,15 +156,18 @@ class RAGDatabase:
         return chunks
 
     def store_content(self, url: str, title: str, content: str, markdown: str,
-                     retention_policy: str = 'permanent', tags: str = '') -> int:
+                     retention_policy: str = 'permanent', tags: str = '',
+                     metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         try:
+            import json
             content_hash = hashlib.sha256(content.encode()).hexdigest()
+            metadata_json = json.dumps(metadata) if metadata else None
 
             with self.transaction():
                 existing = self.execute_with_retry(
                     'SELECT id FROM crawled_content WHERE url = ?', (url,)
                 ).fetchone()
-                
+
                 if existing:
                     old_content_id = existing[0]
                     self.execute_with_retry(
@@ -174,16 +177,25 @@ class RAGDatabase:
 
                 cursor = self.execute_with_retry('''
                     INSERT OR REPLACE INTO crawled_content
-                    (url, title, content, markdown, content_hash, added_by_session, retention_policy, tags)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (url, title, content, markdown, content_hash, self.session_id, retention_policy, tags))
+                    (url, title, content, markdown, content_hash, added_by_session, retention_policy, tags, metadata)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (url, title, content, markdown, content_hash, self.session_id, retention_policy, tags, metadata_json))
 
                 content_id = cursor.lastrowid
                 self.generate_embeddings(content_id, content)
-                return content_id
+
+                return {
+                    "success": True,
+                    "content_id": content_id,
+                    "url": url
+                }
         except Exception as e:
             log_error("store_content", e, url)
-            raise
+            return {
+                "success": False,
+                "error": str(e),
+                "url": url
+            }
 
     def generate_embeddings(self, content_id: int, content: str):
         try:

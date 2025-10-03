@@ -201,10 +201,25 @@ class Crawl4AIRAG:
     async def crawl_and_store(self, url: str, retention_policy: str = 'permanent',
                             tags: str = '') -> dict:
         try:
+            from data.storage import GLOBAL_DB
+
             crawl_result = await self.crawl_url(url, return_full_content=True)
 
             if not crawl_result.get("success"):
                 return crawl_result
+
+            # Store the content in the database
+            storage_result = GLOBAL_DB.store_content(
+                url=url,
+                content=crawl_result["content"],
+                markdown=crawl_result.get("markdown", ""),
+                title=crawl_result["title"],
+                retention_policy=retention_policy,
+                tags=tags
+            )
+
+            if not storage_result.get("success"):
+                return storage_result
 
             return {
                 "success": True,
@@ -222,51 +237,118 @@ class Crawl4AIRAG:
 
     # Removed client-side deep crawl implementation as it's redundant
     # The MCP server's deep_crawl_and_store tool is more efficient and reliable
-    # This method has been replaced with a direct call to the MCP server
-
-    async def _call_mcp_deep_crawl_and_store(self, url: str, max_depth: int, max_pages: int, retention_policy: str, include_external: bool, score_threshold: float) -> dict:
-        """Call the MCP server's deep_crawl_and_store tool directly"""
-        # This is a placeholder implementation that would normally make an API call
-        # In a real implementation, this would call the MCP server
-        return {
-            "success": True,
-            "pages_crawled": 5,
-            "pages_stored": 3,
-            "pages_failed": 2,
-            "stored_pages": [f"{url}/page1", f"{url}/page2", f"{url}/page3"],
-            "failed_pages": [f"{url}/page4", f"{url}/page5"]
-        }
-
-    async def deep_crawl_and_store(self, url: str, retention_policy: str = 'permanent', 
+    async def deep_crawl_and_store(self, url: str, retention_policy: str = 'permanent',
                                  tags: str = '', max_depth: int = 2, max_pages: int = 10,
                                  include_external: bool = False, score_threshold: float = 0.0,
                                  timeout: int = None) -> dict:
+        """
+        Perform a deep crawl using Crawl4AI's BFS strategy and store results in the database
+
+        Args:
+            url: Starting URL for the crawl
+            retention_policy: 'permanent' or 'session_only'
+            tags: Comma-separated tags for categorization
+            max_depth: Maximum depth to crawl (0 = starting page only)
+            max_pages: Maximum number of pages to crawl
+            include_external: Whether to follow external links
+            score_threshold: Minimum score for URLs to be crawled
+            timeout: Optional timeout in seconds for the entire operation
+
+        Returns:
+            Dict with crawl results and storage statistics
+        """
         try:
-            print(f"Starting deep crawl and store: {url}", file=sys.stderr, flush=True)
-            
-            # Use the MCP server's deep_crawl_and_store tool directly
-            # This is more efficient and reliable than client-side implementation
-            result = await self._call_mcp_deep_crawl_and_store(
-                url=url,
-                max_depth=max_depth,
-                max_pages=max_pages,
-                retention_policy=retention_policy,
-                include_external=include_external,
-                score_threshold=score_threshold
+            from data.storage import GLOBAL_DB
+
+            print(f"Starting deep crawl: {url} (depth={max_depth}, max_pages={max_pages})", file=sys.stderr, flush=True)
+
+            # Validate parameters
+            max_depth, max_pages = validate_deep_crawl_params(max_depth, max_pages)
+
+            # Prepare the deep crawl request payload for Crawl4AI
+            payload = {
+                "urls": [url],
+                "deep_crawl": {
+                    "max_depth": max_depth,
+                    "max_pages": max_pages,
+                    "include_external": include_external,
+                    "score_threshold": score_threshold
+                }
+            }
+
+            if timeout:
+                payload["timeout"] = timeout
+
+            # Make request to Crawl4AI service
+            response = requests.post(
+                f"{self.crawl4ai_url}/crawl",
+                json=payload,
+                timeout=timeout or 300  # Default 5 minute timeout for deep crawls
             )
-            
+            response.raise_for_status()
+            result = response.json()
+
             if not result.get("success"):
-                return result
-                
-            # Extract the results from the MCP server response
-            pages_crawled = result.get("pages_crawled", 0)
-            pages_stored = result.get("pages_stored", 0)
-            pages_failed = result.get("pages_failed", 0)
-            stored_pages = result.get("stored_pages", [])
-            failed_pages = result.get("failed_pages", [])
-            
+                error_msg = result.get("error", "Unknown error from Crawl4AI")
+                print(f"Crawl4AI error: {error_msg}", file=sys.stderr, flush=True)
+                return {
+                    "success": False,
+                    "error": error_msg,
+                    "starting_url": url
+                }
+
+            # Process and store each crawled page
+            crawled_results = result.get("results", [])
+            stored_pages = []
+            failed_pages = []
+
+            for crawl_result in crawled_results:
+                page_url = crawl_result.get("url", "")
+
+                try:
+                    # Extract content from the crawl result
+                    content = crawl_result.get("cleaned_html", "")
+                    markdown = crawl_result.get("markdown", {}).get("raw_markdown", "")
+                    title = crawl_result.get("metadata", {}).get("title", "")
+                    depth = crawl_result.get("metadata", {}).get("depth", 0)
+
+                    if not content:
+                        print(f"No content for {page_url}, skipping storage", file=sys.stderr, flush=True)
+                        failed_pages.append(page_url)
+                        continue
+
+                    # Store in database
+                    storage_result = GLOBAL_DB.store_content(
+                        url=page_url,
+                        title=title,
+                        content=content,
+                        markdown=markdown,
+                        retention_policy=retention_policy,
+                        tags=tags,
+                        metadata={
+                            "depth": depth,
+                            "starting_url": url,
+                            "deep_crawl": True
+                        }
+                    )
+
+                    if storage_result.get("success"):
+                        stored_pages.append(page_url)
+                        print(f"✓ Stored page at depth {depth}: {title}", file=sys.stderr, flush=True)
+                    else:
+                        failed_pages.append(page_url)
+                        print(f"✗ Failed to store: {page_url}", file=sys.stderr, flush=True)
+
+                except Exception as e:
+                    print(f"Error processing page {page_url}: {str(e)}", file=sys.stderr, flush=True)
+                    failed_pages.append(page_url)
+
+            pages_stored = len(stored_pages)
+            pages_failed = len(failed_pages)
+            pages_crawled = pages_stored + pages_failed
+
             print(f"Deep crawl completed: {pages_crawled} pages crawled, {pages_stored} stored, {pages_failed} failed", file=sys.stderr, flush=True)
-            
+
             return {
                 "success": True,
                 "starting_url": url,
@@ -278,10 +360,20 @@ class Crawl4AIRAG:
                 "retention_policy": retention_policy,
                 "message": f"Deep crawl completed: {pages_stored} pages stored, {pages_failed} failed"
             }
-            
+
         except Exception as e:
             print(f"Deep crawl and store failed: {str(e)}", file=sys.stderr, flush=True)
-            return {"success": False, "error": str(e)}
+            traceback.print_exc()
+            return {
+                "success": False,
+                "error": str(e),
+                "starting_url": url,
+                "pages_crawled": 0,
+                "pages_stored": 0,
+                "pages_failed": 0,
+                "stored_pages": [],
+                "failed_pages": []
+            }
 
     def get_crawl_status(self, session_id: str) -> Dict[str, Any]:
         return self.deep_crawl_manager.get_crawl_status(session_id)
@@ -312,3 +404,41 @@ class Crawl4AIRAG:
             "remaining_in_queue": len(self.queue_manager.ingestion_queue),
             "message": f"Processed {processed_count} pages from ingestion queue"
         }
+
+    async def search_knowledge(self, query: str, limit: int = 10, filters: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """
+        Search the knowledge base using semantic search
+
+        Args:
+            query: Search query string
+            limit: Maximum number of results to return
+            filters: Optional filters (e.g., tags, retention_policy)
+
+        Returns:
+            Dict with search results
+        """
+        try:
+            from data.storage import GLOBAL_DB
+
+            print(f"Searching knowledge base for: {query}", file=sys.stderr, flush=True)
+
+            # Use the global database instance to search
+            results = GLOBAL_DB.search_similar(query, limit=limit)
+
+            return {
+                "success": True,
+                "query": query,
+                "results": results,
+                "count": len(results),
+                "message": f"Found {len(results)} results for '{query}'"
+            }
+
+        except Exception as e:
+            print(f"Error searching knowledge base: {str(e)}", file=sys.stderr, flush=True)
+            return {
+                "success": False,
+                "error": str(e),
+                "query": query,
+                "results": [],
+                "count": 0
+            }

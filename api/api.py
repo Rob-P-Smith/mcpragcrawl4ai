@@ -115,8 +115,9 @@ def create_app() -> FastAPI:
             content={"success": False, "error": "Internal server error", "timestamp": datetime.now().isoformat()}
         )
 
-    # Initialize RAG system
-    rag_system = Crawl4AIRAG()
+    # Initialize RAG system with Crawl4AI URL from environment
+    crawl4ai_url = os.getenv("CRAWL4AI_URL", "http://localhost:11235")
+    rag_system = Crawl4AIRAG(crawl4ai_url=crawl4ai_url)
 
     # Middleware for request logging
     @app.middleware("http")
@@ -206,23 +207,6 @@ def create_app() -> FastAPI:
             return {"success": True, "data": result, "timestamp": datetime.now().isoformat()}
         except Exception as e:
             log_error("api_crawl_temp", e, request.url)
-            raise HTTPException(status_code=500, detail=str(e))
-
-    # Deep crawl without storing
-    @app.post("/api/v1/crawl/deep")
-    async def deep_crawl(request: DeepCrawlRequest, session_info: Dict = Depends(verify_api_key)):
-        try:
-            result = await rag_system.deep_crawl_dfs(
-                request.url,
-                max_depth=request.max_depth,
-                max_pages=request.max_pages,
-                include_external=request.include_external,
-                score_threshold=request.score_threshold,
-                timeout=request.timeout
-            )
-            return {"success": True, "data": result, "timestamp": datetime.now().isoformat()}
-        except Exception as e:
-            log_error("api_deep_crawl", e, request.url)
             raise HTTPException(status_code=500, detail=str(e))
 
     # Deep crawl and store
