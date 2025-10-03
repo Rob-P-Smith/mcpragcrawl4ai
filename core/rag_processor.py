@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from operations.crawler import Crawl4AIRAG
-from data.storage import GLOBAL_DB, log_error
+from core.data.storage import GLOBAL_DB, log_error
 
 IS_CLIENT_MODE = os.getenv("IS_SERVER", "true").lower() == "false"
 
@@ -18,8 +18,10 @@ if IS_CLIENT_MODE:
     GLOBAL_RAG = None
     print("🔗 Running in CLIENT mode - API calls will be forwarded to remote server", file=sys.stderr, flush=True)
 else:
-    GLOBAL_RAG = Crawl4AIRAG()
-    print("🏠 Running in SERVER mode - using local RAG system", file=sys.stderr, flush=True)
+    # Get Crawl4AI URL from environment, default to localhost
+    crawl4ai_url = os.getenv("CRAWL4AI_URL", "http://localhost:11235")
+    GLOBAL_RAG = Crawl4AIRAG(crawl4ai_url=crawl4ai_url)
+    print(f"🏠 Running in SERVER mode - using local RAG system (Crawl4AI: {crawl4ai_url})", file=sys.stderr, flush=True)
 
 class MCPServer:
     def __init__(self):
@@ -97,22 +99,6 @@ class MCPServer:
                 "name": "clear_temp_memory",
                 "description": "Clear all temporary content from current session",
                 "inputSchema": {"type": "object", "properties": {}}
-            },
-            {
-                "name": "deep_crawl_dfs",
-                "description": "Deep crawl multiple pages using depth-first search strategy without storing",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "url": {"type": "string", "description": "Starting URL for deep crawl"},
-                        "max_depth": {"type": "integer", "description": "Maximum depth to crawl (1-5, default 2)"},
-                        "max_pages": {"type": "integer", "description": "Maximum pages to crawl (1-250, default 10)"},
-                        "include_external": {"type": "boolean", "description": "Whether to follow external domain links (default false)"},
-                        "score_threshold": {"type": "number", "description": "Minimum URL score to crawl (0.0-1.0, default 0.0)"},
-                        "timeout": {"type": "integer", "description": "Timeout in seconds (60-1800, auto-calculated if not provided)"}
-                    },
-                    "required": ["url"]
-                }
             },
             {
                 "name": "deep_crawl_and_store",
@@ -269,32 +255,7 @@ class MCPServer:
                             "removed_count": removed,
                             "session_id": GLOBAL_DB.session_id
                         }
-                
-                elif tool_name == "deep_crawl_dfs":
-                    url = arguments["url"]
-                    if not validate_url(url):
-                        result = {"success": False, "error": "Invalid or unsafe URL provided"}
-                    else:
-                        max_depth, max_pages = validate_deep_crawl_params(
-                            arguments.get("max_depth", 2),
-                            arguments.get("max_pages", 10)
-                        )
-                        include_external = arguments.get("include_external", False)
-                        score_threshold = validate_float_range(
-                            arguments.get("score_threshold", 0.0), 0.0, 1.0, "score_threshold"
-                        )
-                        timeout = arguments.get("timeout")
 
-                        if IS_CLIENT_MODE:
-                            api_result = await api_client.deep_crawl_dfs(
-                                url, max_depth, max_pages, include_external, score_threshold, timeout
-                            )
-                            result = api_result.get("data", api_result)
-                        else:
-                            result = await self.rag.deep_crawl_dfs(
-                                url, max_depth, max_pages, include_external, score_threshold, timeout
-                            )
-                
                 elif tool_name == "deep_crawl_and_store":
                     url = arguments["url"]
                     if not validate_url(url):

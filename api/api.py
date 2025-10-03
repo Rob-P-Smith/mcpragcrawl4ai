@@ -21,7 +21,7 @@ import httpx
 # Import local modules
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from operations.crawler import Crawl4AIRAG, validate_url, validate_string_length, validate_integer_range, validate_deep_crawl_params, validate_float_range
-from data.storage import GLOBAL_DB, log_error
+from core.data.storage import GLOBAL_DB, log_error
 from api.auth import verify_api_key, log_api_request, cleanup_sessions
 
 # Load environment variables

@@ -1,17 +1,19 @@
 services:
-  api-server:
+  crawl4ai-rag:
     build:
       context: ../..
       dockerfile: deployments/server/Dockerfile.api
-    container_name: crawl4ai-api-server
+    container_name: crawl4ai-rag-server
     ports:
-      - "8080:8080"
+      - "8080:8080"  # REST API
+      - "3000:3000"  # MCP Server
     volumes:
       - ../../data:/app/data
     env_file:
       - .env
     environment:
       - CRAWL4AI_URL=http://crawl4ai:11235
+      - IS_SERVER=true
     restart: unless-stopped
     networks:
       - crawler_default

@@ -3,6 +3,7 @@ import requests
 import re
 import sys
 import time
+import traceback
 from urllib.parse import urlparse, urljoin
 from typing import Dict, Any, List, Optional, Callable
 
@@ -176,14 +177,25 @@ class Crawl4AIRAG:
                 content = crawl_result.get("cleaned_html", "")
                 markdown = crawl_result.get("markdown", {}).get("raw_markdown", "")
                 title = crawl_result.get("metadata", {}).get("title", "")
-                
+                status_code = crawl_result.get("metadata", {}).get("status_code", 0)
+
+                # Check for HTTP error status codes (4xx, 5xx)
+                if status_code >= 400:
+                    return {
+                        "success": False,
+                        "error": f"HTTP {status_code} error",
+                        "status_code": status_code,
+                        "url": url
+                    }
+
                 if return_full_content:
                     return {
                         "success": True,
                         "url": url,
                         "title": title,
                         "content": content,
-                        "markdown": markdown
+                        "markdown": markdown,
+                        "status_code": status_code
                     }
                 else:
                     return {
@@ -192,6 +204,7 @@ class Crawl4AIRAG:
                         "title": title,
                         "content_preview": content[:300] + "..." if len(content) > 300 else content,
                         "content_length": len(content),
+                        "status_code": status_code,
                         "message": f"Crawled '{title}' - {len(content)} characters"
                     }
         except Exception as e:
@@ -201,7 +214,7 @@ class Crawl4AIRAG:
     async def crawl_and_store(self, url: str, retention_policy: str = 'permanent',
                             tags: str = '') -> dict:
         try:
-            from data.storage import GLOBAL_DB
+            from core.data.storage import GLOBAL_DB
 
             crawl_result = await self.crawl_url(url, return_full_content=True)
 
@@ -235,91 +248,154 @@ class Crawl4AIRAG:
             print(f"Error storing content from {url}: {str(e)}", file=sys.stderr, flush=True)
             return {"success": False, "error": str(e)}
 
-    # Removed client-side deep crawl implementation as it's redundant
-    # The MCP server's deep_crawl_and_store tool is more efficient and reliable
+    def _is_english(self, content: str, url: str = "") -> bool:
+        """
+        Simple keyword-based English detection.
+        Checks for at least ONE common English word or technical term.
+        This is intentionally permissive for technical documentation.
+        """
+        if not content or len(content) < 50:
+            return False
+
+        content_lower = content.lower()
+
+        # Common English words and technical terms
+        english_indicators = [
+            'the ', 'and ', 'for ', 'are ', 'not ', 'you ', 'with ',
+            'from ', 'this ', 'that ', 'have ', 'was ', 'can ', 'will ',
+            'about ', 'when ', 'where ', 'what ', 'which ', 'who ',
+            'use ', 'example', 'code', 'function', 'class', 'method',
+            'install', 'configure', 'documentation', 'guide', 'tutorial',
+            'how to', 'getting started', 'introduction', 'overview'
+        ]
+
+        # Check first 2000 characters for at least ONE indicator
+        sample_text = content_lower[:2000]
+        for indicator in english_indicators:
+            if indicator in sample_text:
+                print(f"✓ English detected ('{indicator.strip()}'): {url}", file=sys.stderr, flush=True)
+                return True
+
+        print(f"⊘ No English keywords found: {url}", file=sys.stderr, flush=True)
+        return False
+
+    def _add_links_to_queue(self, links: dict, visited: set, queue: list,
+                            current_depth: int, base_domain: str, include_external: bool):
+        """Extract internal links and add to BFS queue"""
+        internal_links = links.get("internal", [])
+
+        for link in internal_links:
+            link_url = link.get("href", "")
+            if not link_url or link_url in visited:
+                continue
+
+            # Domain check
+            link_domain = urlparse(link_url).netloc
+            if not include_external and link_domain != base_domain:
+                continue
+
+            queue.append((link_url, current_depth + 1))
+
     async def deep_crawl_and_store(self, url: str, retention_policy: str = 'permanent',
                                  tags: str = '', max_depth: int = 2, max_pages: int = 10,
                                  include_external: bool = False, score_threshold: float = 0.0,
                                  timeout: int = None) -> dict:
         """
-        Perform a deep crawl using Crawl4AI's BFS strategy and store results in the database
+        Client-side BFS deep crawl with English-only language filtering
+
+        Algorithm:
+        1. Initialize: visited set, BFS queue [(url, depth)]
+        2. While queue not empty and stored < max_pages:
+           a. Pop URL from queue (BFS order)
+           b. Crawl single page via Crawl4AI
+           c. Check language (2-stage: HTML lang attr + 2+ keywords)
+           d. If English: store in database
+           e. If non-English: skip storage, log
+           f. Extract links, add to queue for next depth
+        3. Return statistics
 
         Args:
             url: Starting URL for the crawl
             retention_policy: 'permanent' or 'session_only'
             tags: Comma-separated tags for categorization
             max_depth: Maximum depth to crawl (0 = starting page only)
-            max_pages: Maximum number of pages to crawl
+            max_pages: Maximum number of English pages to store
             include_external: Whether to follow external links
-            score_threshold: Minimum score for URLs to be crawled
-            timeout: Optional timeout in seconds for the entire operation
+            score_threshold: (unused in client-side implementation)
+            timeout: (unused in client-side implementation)
 
         Returns:
             Dict with crawl results and storage statistics
         """
         try:
-            from data.storage import GLOBAL_DB
+            from core.data.storage import GLOBAL_DB
 
-            print(f"Starting deep crawl: {url} (depth={max_depth}, max_pages={max_pages})", file=sys.stderr, flush=True)
+            print(f"Starting deep crawl: {url} (depth={max_depth}, max_pages={max_pages}, English only)", file=sys.stderr, flush=True)
 
             # Validate parameters
             max_depth, max_pages = validate_deep_crawl_params(max_depth, max_pages)
 
-            # Prepare the deep crawl request payload for Crawl4AI
-            payload = {
-                "urls": [url],
-                "deep_crawl": {
-                    "max_depth": max_depth,
-                    "max_pages": max_pages,
-                    "include_external": include_external,
-                    "score_threshold": score_threshold
-                }
-            }
-
-            if timeout:
-                payload["timeout"] = timeout
-
-            # Make request to Crawl4AI service
-            response = requests.post(
-                f"{self.crawl4ai_url}/crawl",
-                json=payload,
-                timeout=timeout or 300  # Default 5 minute timeout for deep crawls
-            )
-            response.raise_for_status()
-            result = response.json()
-
-            if not result.get("success"):
-                error_msg = result.get("error", "Unknown error from Crawl4AI")
-                print(f"Crawl4AI error: {error_msg}", file=sys.stderr, flush=True)
-                return {
-                    "success": False,
-                    "error": error_msg,
-                    "starting_url": url
-                }
-
-            # Process and store each crawled page
-            crawled_results = result.get("results", [])
+            # BFS setup
+            visited = set()
+            queue = [(url, 0)]  # (url, depth) tuples
             stored_pages = []
+            skipped_non_english = []
             failed_pages = []
+            base_domain = urlparse(url).netloc
 
-            for crawl_result in crawled_results:
-                page_url = crawl_result.get("url", "")
+            while queue and len(stored_pages) < max_pages:
+                current_url, depth = queue.pop(0)  # BFS: pop from front
 
+                # Skip if already visited or exceeds depth
+                if current_url in visited or depth > max_depth:
+                    continue
+
+                visited.add(current_url)
+                print(f"📄 Crawling (depth {depth}): {current_url}", file=sys.stderr, flush=True)
+
+                # 1. Crawl the page
                 try:
-                    # Extract content from the crawl result
+                    response = requests.post(
+                        f"{self.crawl4ai_url}/crawl",
+                        json={"urls": [current_url]},
+                        timeout=30
+                    )
+                    response.raise_for_status()
+                    result = response.json()
+
+                    if not result.get("success") or not result.get("results"):
+                        failed_pages.append(current_url)
+                        continue
+
+                    crawl_result = result["results"][0]
                     content = crawl_result.get("cleaned_html", "")
                     markdown = crawl_result.get("markdown", {}).get("raw_markdown", "")
                     title = crawl_result.get("metadata", {}).get("title", "")
-                    depth = crawl_result.get("metadata", {}).get("depth", 0)
+                    links = crawl_result.get("links", {})
+                    status_code = crawl_result.get("metadata", {}).get("status_code", 0)
 
-                    if not content:
-                        print(f"No content for {page_url}, skipping storage", file=sys.stderr, flush=True)
-                        failed_pages.append(page_url)
+                    # Check for HTTP error status codes (4xx, 5xx)
+                    if status_code >= 400:
+                        print(f"⊘ Skipping error page (HTTP {status_code}): {current_url}", file=sys.stderr, flush=True)
+                        failed_pages.append(current_url)
                         continue
 
-                    # Store in database
+                    if not content:
+                        failed_pages.append(current_url)
+                        continue
+
+                    # 2. Language detection: keyword validation
+                    if not self._is_english(content, current_url):
+                        skipped_non_english.append(current_url)
+                        # Still extract links to continue crawl
+                        if depth < max_depth:
+                            self._add_links_to_queue(links, visited, queue, depth,
+                                                    base_domain, include_external)
+                        continue
+
+                    # 3. Store English page
                     storage_result = GLOBAL_DB.store_content(
-                        url=page_url,
+                        url=current_url,
                         title=title,
                         content=content,
                         markdown=markdown,
@@ -328,41 +404,47 @@ class Crawl4AIRAG:
                         metadata={
                             "depth": depth,
                             "starting_url": url,
-                            "deep_crawl": True
+                            "deep_crawl": True,
+                            "language": "en"
                         }
                     )
 
                     if storage_result.get("success"):
-                        stored_pages.append(page_url)
-                        print(f"✓ Stored page at depth {depth}: {title}", file=sys.stderr, flush=True)
+                        stored_pages.append(current_url)
+                        print(f"✓ Stored English page (depth {depth}): {title}", file=sys.stderr, flush=True)
                     else:
-                        failed_pages.append(page_url)
-                        print(f"✗ Failed to store: {page_url}", file=sys.stderr, flush=True)
+                        failed_pages.append(current_url)
+
+                    # 4. Extract links for next depth level
+                    if depth < max_depth:
+                        self._add_links_to_queue(links, visited, queue, depth,
+                                                base_domain, include_external)
 
                 except Exception as e:
-                    print(f"Error processing page {page_url}: {str(e)}", file=sys.stderr, flush=True)
-                    failed_pages.append(page_url)
+                    print(f"Error crawling {current_url}: {str(e)}", file=sys.stderr, flush=True)
+                    failed_pages.append(current_url)
 
-            pages_stored = len(stored_pages)
-            pages_failed = len(failed_pages)
-            pages_crawled = pages_stored + pages_failed
-
-            print(f"Deep crawl completed: {pages_crawled} pages crawled, {pages_stored} stored, {pages_failed} failed", file=sys.stderr, flush=True)
+            # Summary
+            total_crawled = len(stored_pages) + len(skipped_non_english) + len(failed_pages)
+            print(f"Deep crawl completed: {total_crawled} pages crawled, {len(stored_pages)} stored (English), {len(skipped_non_english)} skipped (non-English), {len(failed_pages)} failed", file=sys.stderr, flush=True)
 
             return {
                 "success": True,
                 "starting_url": url,
-                "pages_crawled": pages_crawled,
-                "pages_stored": pages_stored,
-                "pages_failed": pages_failed,
+                "pages_crawled": total_crawled,
+                "pages_stored": len(stored_pages),
+                "pages_skipped_language": len(skipped_non_english),
+                "pages_failed": len(failed_pages),
                 "stored_pages": stored_pages,
+                "skipped_pages": skipped_non_english,
                 "failed_pages": failed_pages,
                 "retention_policy": retention_policy,
-                "message": f"Deep crawl completed: {pages_stored} pages stored, {pages_failed} failed"
+                "language_filter": "en",
+                "message": f"Deep crawl completed: {len(stored_pages)} English pages stored, {len(skipped_non_english)} non-English skipped"
             }
 
         except Exception as e:
-            print(f"Deep crawl and store failed: {str(e)}", file=sys.stderr, flush=True)
+            print(f"Deep crawl failed: {str(e)}", file=sys.stderr, flush=True)
             traceback.print_exc()
             return {
                 "success": False,
@@ -370,8 +452,10 @@ class Crawl4AIRAG:
                 "starting_url": url,
                 "pages_crawled": 0,
                 "pages_stored": 0,
+                "pages_skipped_language": 0,
                 "pages_failed": 0,
                 "stored_pages": [],
+                "skipped_pages": [],
                 "failed_pages": []
             }
 
@@ -418,7 +502,7 @@ class Crawl4AIRAG:
             Dict with search results
         """
         try:
-            from data.storage import GLOBAL_DB
+            from core.data.storage import GLOBAL_DB
 
             print(f"Searching knowledge base for: {query}", file=sys.stderr, flush=True)
 

@@ -9,6 +9,9 @@ import sys
 import uvicorn
 from dotenv import load_dotenv
 
+# Add /app to Python path for imports
+sys.path.insert(0, '/app')
+
 # Load environment variables
 load_dotenv()
 
