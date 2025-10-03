@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   crawl4ai:
     image: unclecode/crawl4ai:latest
@@ -18,19 +16,19 @@ services:
     networks:
       - crawl4ai_network
 
-  mcp-server:
-    build: 
-      context: .
-      dockerfile: Dockerfile
-    container_name: crawl4ai-mcp-server
+  api-server:
+    build:
+      context: ../..
+      dockerfile: deployments/server/Dockerfile.api
+    container_name: crawl4ai-api-server
     ports:
-      - "8765:8765"
+      - "8080:8080"
     volumes:
-      - ./data:/app/data
+      - ../../data:/app/data
+    env_file:
+      - .env
     environment:
       - CRAWL4AI_URL=http://crawl4ai:11235
-      - MCP_HOST=0.0.0.0
-      - MCP_PORT=8765
     restart: unless-stopped
     depends_on:
       crawl4ai:
@@ -41,6 +39,3 @@ services:
 networks:
   crawl4ai_network:
     driver: bridge
-
-volumes:
-  mcp_data:

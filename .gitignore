@@ -8,3 +8,4 @@ data/crawl4ai_rag_errors.log
 crawl4ai_rag.db
 .venv
 .coverage
+**/.env
