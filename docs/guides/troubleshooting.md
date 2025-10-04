@@ -6,11 +6,14 @@ This guide provides solutions for common issues encountered when setting up and 
 
 ### 1. Docker Container Not Starting
 
-**Symptoms**: The container fails to start or shows "exited" status in `docker-compose ps`.
+**Symptoms**: The container fails to start or shows "exited" status in `docker ps`.
 
 **Solutions**:
-- Check container logs: `docker compose logs crawl4ai` and `docker compose logs crawl4ai-mcp-server`
-- Verify port availability: `sudo lsof -i :11235` and `sudo lsof -i :8765`
+- Check container logs: `docker logs crawl4ai` or `docker logs crawl4ai-rag-server`
+- Verify port availability:
+  - Crawl4AI: `sudo lsof -i :11235`
+  - REST API: `sudo lsof -i :8080`
+  - MCP Server: `sudo lsof -i :3000`
 - Increase Docker memory allocation in Docker Desktop settings
 - Check disk space: `df -h` (ensure at least 10GB free)
 - Restart Docker service: `sudo systemctl restart docker`
@@ -20,14 +23,14 @@ This guide provides solutions for common issues encountered when setting up and 
 **Symptoms**: "ModuleNotFoundError" or similar import errors when running the RAG server.
 
 **Solutions**:
-- Verify virtual environment is activated: `source crawl4ai_rag_env/bin/activate`
+- Verify virtual environment is activated: `source .venv/bin/activate`
 - Check installed packages: `pip list | grep -E "(sentence|sqlite|numpy|requests)"`
-- Reinstall dependencies: 
+- Reinstall dependencies:
 ```bash
 deactivate
-rm -rf crawl4ai_rag_env
-python3 -m venv crawl4ai_rag_env
-source crawl4ai_rag_env/bin/activate
+rm -rf .venv
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
 - Check Python version compatibility with installed packages
@@ -49,10 +52,14 @@ pip install -r requirements.txt
 
 **Solutions**:
 - Check network connectivity: `ping your-server-ip`
-- Verify firewall rules allow traffic on required ports (8765, 11235)
+- Verify firewall rules allow traffic on required ports (8080 for REST API, 3000 for MCP, 11235 for Crawl4AI)
 - For cloud deployments, check security group settings
 - Increase timeout values in configuration files
-- Test with curl directly to the service endpoint
+- Test with curl directly to the service endpoint:
+```bash
+curl http://localhost:8080/health  # REST API
+curl http://localhost:11235/  # Crawl4AI
+```
 
 ### 5. Memory Issues
 
@@ -81,11 +88,11 @@ pip install -r requirements.txt
 **Symptoms**: "Failed to connect to Crawl4AI" errors.
 
 **Solutions**:
-- Verify the Crawl4AI container is running: `docker-compose ps`
+- Verify the Crawl4AI container is running: `docker ps | grep crawl4ai`
 - Check if port 11235 is available: `sudo lsof -i :11235`
-- Restart the Crawl4AI container: `docker compose restart crawl4ai`
-- Update to the latest Crawl4AI Docker image
-- Check network configuration in docker-compose.yml
+- Restart the Crawl4AI container: `docker restart crawl4ai`
+- Update to the latest Crawl4AI Docker image: `docker pull unclecode/crawl4ai:latest`
+- Check if containers are on same network: `docker network inspect crawler_default`
 
 ### 8. LM-Studio Integration Issues
 
@@ -93,10 +100,12 @@ pip install -r requirements.txt
 
 **Solutions**:
 - Verify file paths in mcp.json are absolute and correct
-- Ensure the script has execute permissions: `chmod +x crawl4ai_rag_optimized.py`
+- Check MCP server path: should be `core/rag_processor.py`
 - Restart LM-Studio completely after configuration changes
 - Check that the virtual environment path is correct
-- For Docker deployments, ensure proper port mapping
+- For Docker deployments:
+  - Server mode: Use socat to connect to port 3000
+  - Client mode: Use docker exec with container name
 
 ### 9. Rate Limiting Issues
 

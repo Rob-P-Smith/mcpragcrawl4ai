@@ -179,7 +179,6 @@ class Crawl4AIRAG:
                 title = crawl_result.get("metadata", {}).get("title", "")
                 status_code = crawl_result.get("metadata", {}).get("status_code", 0)
 
-                # Check for HTTP error status codes (4xx, 5xx)
                 if status_code >= 400:
                     return {
                         "success": False,
@@ -221,7 +220,6 @@ class Crawl4AIRAG:
             if not crawl_result.get("success"):
                 return crawl_result
 
-            # Store the content in the database
             storage_result = GLOBAL_DB.store_content(
                 url=url,
                 content=crawl_result["content"],
@@ -259,7 +257,6 @@ class Crawl4AIRAG:
 
         content_lower = content.lower()
 
-        # Common English words and technical terms
         english_indicators = [
             'the ', 'and ', 'for ', 'are ', 'not ', 'you ', 'with ',
             'from ', 'this ', 'that ', 'have ', 'was ', 'can ', 'will ',
@@ -269,7 +266,6 @@ class Crawl4AIRAG:
             'how to', 'getting started', 'introduction', 'overview'
         ]
 
-        # Check first 2000 characters for at least ONE indicator
         sample_text = content_lower[:2000]
         for indicator in english_indicators:
             if indicator in sample_text:
@@ -332,28 +328,23 @@ class Crawl4AIRAG:
 
             print(f"Starting deep crawl: {url} (depth={max_depth}, max_pages={max_pages}, English only)", file=sys.stderr, flush=True)
 
-            # Validate parameters
             max_depth, max_pages = validate_deep_crawl_params(max_depth, max_pages)
 
-            # BFS setup
             visited = set()
-            queue = [(url, 0)]  # (url, depth) tuples
+            queue = [(url, 0)]
             stored_pages = []
             skipped_non_english = []
             failed_pages = []
             base_domain = urlparse(url).netloc
 
             while queue and len(stored_pages) < max_pages:
-                current_url, depth = queue.pop(0)  # BFS: pop from front
-
-                # Skip if already visited or exceeds depth
+                current_url, depth = queue.pop(0)
                 if current_url in visited or depth > max_depth:
                     continue
 
                 visited.add(current_url)
                 print(f"📄 Crawling (depth {depth}): {current_url}", file=sys.stderr, flush=True)
 
-                # 1. Crawl the page
                 try:
                     response = requests.post(
                         f"{self.crawl4ai_url}/crawl",
@@ -374,7 +365,6 @@ class Crawl4AIRAG:
                     links = crawl_result.get("links", {})
                     status_code = crawl_result.get("metadata", {}).get("status_code", 0)
 
-                    # Check for HTTP error status codes (4xx, 5xx)
                     if status_code >= 400:
                         print(f"⊘ Skipping error page (HTTP {status_code}): {current_url}", file=sys.stderr, flush=True)
                         failed_pages.append(current_url)
@@ -384,16 +374,13 @@ class Crawl4AIRAG:
                         failed_pages.append(current_url)
                         continue
 
-                    # 2. Language detection: keyword validation
                     if not self._is_english(content, current_url):
                         skipped_non_english.append(current_url)
-                        # Still extract links to continue crawl
                         if depth < max_depth:
                             self._add_links_to_queue(links, visited, queue, depth,
                                                     base_domain, include_external)
                         continue
 
-                    # 3. Store English page
                     storage_result = GLOBAL_DB.store_content(
                         url=current_url,
                         title=title,
@@ -415,7 +402,6 @@ class Crawl4AIRAG:
                     else:
                         failed_pages.append(current_url)
 
-                    # 4. Extract links for next depth level
                     if depth < max_depth:
                         self._add_links_to_queue(links, visited, queue, depth,
                                                 base_domain, include_external)
@@ -424,7 +410,6 @@ class Crawl4AIRAG:
                     print(f"Error crawling {current_url}: {str(e)}", file=sys.stderr, flush=True)
                     failed_pages.append(current_url)
 
-            # Summary
             total_crawled = len(stored_pages) + len(skipped_non_english) + len(failed_pages)
             print(f"Deep crawl completed: {total_crawled} pages crawled, {len(stored_pages)} stored (English), {len(skipped_non_english)} skipped (non-English), {len(failed_pages)} failed", file=sys.stderr, flush=True)
 
@@ -506,7 +491,6 @@ class Crawl4AIRAG:
 
             print(f"Searching knowledge base for: {query}", file=sys.stderr, flush=True)
 
-            # Use the global database instance to search
             results = GLOBAL_DB.search_similar(query, limit=limit)
 
             return {
@@ -525,4 +509,27 @@ class Crawl4AIRAG:
                 "query": query,
                 "results": [],
                 "count": 0
+            }
+
+    async def get_database_stats(self) -> Dict[str, Any]:
+        """
+        Get comprehensive database statistics
+
+        Returns:
+            Dict with database statistics including counts, sizes, and recent activity
+        """
+        try:
+            from core.data.storage import GLOBAL_DB
+
+            print("Retrieving database statistics...", file=sys.stderr, flush=True)
+
+            stats = GLOBAL_DB.get_database_stats()
+
+            return stats
+
+        except Exception as e:
+            print(f"Error retrieving database stats: {str(e)}", file=sys.stderr, flush=True)
+            return {
+                "success": False,
+                "error": str(e)
             }

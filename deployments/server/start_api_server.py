@@ -9,16 +9,13 @@ import sys
 import uvicorn
 from dotenv import load_dotenv
 
-# Add /app to Python path for imports
 sys.path.insert(0, '/app')
 
-# Load environment variables
 load_dotenv()
 
 def main():
     """Start the API server based on configuration"""
 
-    # Check if running in server mode
     is_server = os.getenv("IS_SERVER", "true").lower() == "true"
 
     if not is_server:
@@ -27,12 +24,10 @@ def main():
         print("   The MCP client will automatically forward requests to the remote API.")
         sys.exit(1)
 
-    # Server configuration
     host = os.getenv("SERVER_HOST", "0.0.0.0")
     port = int(os.getenv("SERVER_PORT", "8080"))
     log_level = os.getenv("LOG_LEVEL", "info").lower()
 
-    # Validate required configuration
     api_key = os.getenv("LOCAL_API_KEY")
     if not api_key:
         print("❌ LOCAL_API_KEY not set in .env file")
@@ -50,11 +45,9 @@ def main():
     print(f"   http://{host}:{port}/docs")
     print("")
 
-    # Import and create the app
     from api.api import create_app
     app = create_app()
 
-    # Start the server
     try:
         uvicorn.run(
             app,

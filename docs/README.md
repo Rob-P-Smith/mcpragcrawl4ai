@@ -1,634 +1,333 @@
-# Crawl4AI RAG MCP Server Setup Guide
+# Crawl4AI RAG MCP Server - Documentation
 
-A complete guide to setting up a Retrieval-Augmented Generation (RAG) system using Crawl4AI for web content extraction, sqlite-vec for vector storage, and LM-Studio MCP integration.
+Complete documentation for the Crawl4AI RAG (Retrieval-Augmented Generation) MCP Server implementation.
 
-## Prerequisites
+## Overview
 
-- Ubuntu/Linux system or other Linux distribution
-- Docker and docker-compose installed
-- Python 3.8 or higher
-- LM-Studio installed
-- At least 4GB RAM available
-- 10GB free disk space
+This system provides a local homelab-friendly RAG solution that combines:
+- **Crawl4AI** for web content extraction
+- **SQLite + sqlite-vec** for vector storage and semantic search
+- **LM-Studio MCP integration** for AI assistant interaction
+- **REST API layer** for bidirectional communication
 
-## Homelab Setup Guide
+## Quick Links
 
-This system is designed for local homelab deployment. It can run entirely on your personal computer or home server without requiring cloud infrastructure.
+### Getting Started
+- [Quick Start Guide](guides/quick-start.md) - Get up and running quickly
+- [Deployment Guide](deployments.md) - Comprehensive deployment options
+- [Installation Guide](#installation-guide) - Detailed setup instructions
 
-### Step 1: Setup Docker Container
+### API & Integration
+- [API Documentation](API_README.md) - REST API reference
+- [API Endpoints](api/endpoints.md) - Detailed endpoint documentation
+- [Docker Setup](docker/index.md) - Docker deployment guide
 
-Create the Docker configuration for Crawl4AI:
-
-```bash
-# Create docker-compose.yml
-cat > docker-compose.yml << 'EOF'
-services:
-  crawl4ai:
-    image: unclecode/crawl4ai:latest
-    container_name: crawl4ai
-    ports:
-      - "11235:11235"
-    shm_size: '1gb'
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11235/"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-    environment:
-      - LOG_LEVEL=INFO
-EOF
-
-# Start the container
-docker-compose up -d
-
-# Verify container is running
-docker-compose ps
-```
-
-### Step 2: Test Docker Container
-
-Verify the Crawl4AI container is working:
-
-```bash
-# Wait for container to be healthy
-sleep 30
-
-# Test basic connectivity
-curl http://localhost:11235/
-
-# Test crawling functionality
-curl -X POST http://localhost:11235/crawl \
-  -H "Content-Type: application/json" \
-  -d '{"urls": ["https://httpbin.org/html"]}'
-```
-
-Expected response should include `"success": true` and crawled content.
-
-### Step 3: Create Python Virtual Environment
-
-```bash
-# Create virtual environment
-python3 -m venv crawl4ai_rag_env
-
-# Activate environment
-source crawl4ai_rag_env/bin/activate
-
-# Upgrade pip
-pip install --upgrade pip
-```
-
-### Step 4: Install Dependencies
-
-Install all required Python packages:
-
-```bash
-# Core dependencies
-pip install sentence-transformers==5.1.0
-pip install sqlite-vec==0.1.6
-pip install numpy==2.3.2
-pip install requests==2.32.5
-
-# Additional dependencies that may be required
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-pip install transformers==4.56.1
-pip install huggingface-hub
-```
-
-### Step 5: Test sqlite-vec Installation
-
-Run the test script to verify sqlite-vec is working:
-
-# Run the test
-
-```
-python test_sqlite_vec.py
-```
-
-### Step 6: Test Sentence Transformers
-
-Verify the sentence transformer model loads correctly:
-
-```bash
-python -c "
-from sentence_transformers import SentenceTransformer
-print('Loading model...')
-model = SentenceTransformer('all-MiniLM-L6-v2')
-print('✓ Model loaded successfully')
-test_text = ['Hello world', 'Testing embeddings']
-embeddings = model.encode(test_text)
-print(f'✓ Embeddings generated: {embeddings.shape}')
-"
-```
-
-### Step 7: Add RAG Server Script
-
-Create the main RAG server script. The original `crawl4ai_rag_optimized.py` has been split into three separate files for better organization:
-
-1. **operations/crawler.py** - Contains all web crawling logic
-2. **data/storage.py** - Handles database interactions and content storage
-3. **core/rag_processor.py** - Manages the MCP server interface and request handling
-
-Copy these three files to your project directory and make them executable:
-
-```bash
-# Make scripts executable
-chmod +x operations/crawler.py data/storage.py core/rag_processor.py
-
-# Test script initialization
-python3 core/rag_processor.py &
-SCRIPT_PID=$!
-sleep 5
-kill $SCRIPT_PID
-
-# You should see:
-# Initializing RAG system...
-# RAG system ready!
-```
-
-### Step 8: Test RAG Server Manually
-
-Test the MCP server with manual JSON-RPC calls:
-
-```bash
-# Test tools listing
-echo '{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}' | python3 core/rag_processor.py
-
-# Test crawling and storing
-echo '{"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "crawl_and_remember", "arguments": {"url": "https://httpbin.org/html"}}}' | python3 core/rag_processor.py
-
-# Test search functionality
-echo '{"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "search_memory", "arguments": {"query": "test content"}}}' | python3 core/rag_processor.py
-```
-
-### Step 9: Configure LM-Studio MCP
-
-Update LM-Studio's MCP configuration file:
-
-```bash
-# Get the full paths
-VENV_PATH=$(pwd)/crawl4ai_rag_env
-SCRIPT_PATH=$(pwd)/core/rag_processor.py
-
-echo "Virtual Environment: $VENV_PATH"
-echo "Script Path: $SCRIPT_PATH"
-```
-
-In LM-Studio, go to **Program → View MCP Configuration** and update `mcp.json`:
-
-# Option 1, point it to your python location if necessary
-
-```json
-{
-  "mcpServers": {
-    "crawl4ai-rag": {
-      "command": "/home/YOUR_USERNAME/crawl4ai_rag_env/bin/python",
-      "args": ["/home/YOUR_USERNAME/core/rag_processor.py"],
-      "env": {
-        "PYTHONPATH": "/home/YOUR_USERNAME/crawl4ai_rag_env/lib/python3.11/site-packages"
-      }
-    }
-  }
-}
-```
-
-# Option 2: If you are working in an active venv
-
-```json
-{
-  "mcpServers": {
-    "crawl4ai-rag": {
-      "command": "/home/robiloo/crawl4ai_rag_env/bin/python3",
-      "args": ["/home/robiloo/core/rag_processor.py"]
-    }
-  }
-}
-```
-
-Replace `YOUR_USERNAME` with your actual username and adjust Python version as needed.
-
-### Step 10: Verify LM-Studio Integration
-
-1. **Restart LM-Studio completely** (close and reopen)
-2. **Check Integrations panel** - should show `crawl4ai-rag` with blue toggle
-3. **Verify available tools**:
-
-   **Basic Tools:**
-   - `crawl_url` - Crawl single page without storing
-   - `crawl_and_remember` - Crawl single page and store permanently
-   - `crawl_temp` - Crawl single page and store temporarily
-   
-   **Deep Crawling Tools:**
-   - `deep_crawl_dfs` - Deep crawl multiple pages without storing (preview only)
-   - `deep_crawl_and_store` - Deep crawl and store all pages permanently
-   
-   **Knowledge Management:**
-   - `search_memory` - Search stored content using semantic similarity
-   - `list_memory` - List all stored content
-   - `forget_url` - Remove specific content by URL
-   - `clear_temp_memory` - Clear session content
-
-4. **Test with simple command**: "List what's in memory"
-
-## Deep Crawling Features
-
-The RAG system includes advanced deep crawling capabilities using depth-first search (DFS) to automatically discover and process multiple interconnected pages:
-
-### Deep Crawl Parameters
-
-- **max_depth** (1-5): How many link levels to follow from starting URL
-- **max_pages** (1-250): Maximum total pages to crawl 
-- **include_external** (true/false): Whether to follow links to external domains
-- **score_threshold** (0.0-1.0): Minimum relevance score for pages (currently unused)
-- **timeout** (seconds): Maximum time to spend on entire crawl operation
-
-### Deep Crawl Process
-
-1. **Link Discovery**: Extracts up to 5 links per page from HTML content
-2. **URL Filtering**: Skips non-content files (.css, .js, images, etc.)
-3. **Domain Control**: Optionally restricts to same domain as starting URL
-4. **Duplicate Prevention**: Tracks visited URLs to avoid loops
-5. **Content Processing**: Each page is crawled, chunked, and embedded individually
-
-### URL Deduplication
-
-- **Automatic Replacement**: Same URL crawled multiple times updates existing record
-- **Clean Embeddings**: Old vector embeddings deleted before generating new ones
-- **Fresh Content**: Always stores the most recent version of each page
-- **No Duplicates**: Database enforces unique constraint on URL field
-
-### Usage Examples
-
-**Quick exploration** (fast, small scope):
-```
-deep_crawl_dfs with max_depth=2, max_pages=25
-```
-
-**Comprehensive documentation crawl**:
-```
-deep_crawl_and_store with max_depth=3, max_pages=100, include_external=false
-```
-
-**Large site analysis**:
-```
-deep_crawl_and_store with max_depth=4, max_pages=250, timeout=1200
-```
-
-## Homelab Considerations
-
-1. **Local Network Access**: The system runs on your local network
-2. **No Cloud Costs**: Everything runs locally with no recurring fees
-3. **Security**: Configure firewall rules to restrict access to trusted devices
-4. **Backup Strategy**: Regular backups of the SQLite database directory
-5. **Resource Planning**: Ensure adequate RAM (minimum 4GB) and disk space (10GB+)
+### Guides
+- [Deployment Options](deployments.md) - Server, Client, and Local deployment
+- [Troubleshooting](guides/troubleshooting.md) - Common issues and solutions
+- [Full Documentation](index.md) - Complete documentation index
 
 ## Architecture
 
-```mermaid
-graph TD
-    A[User Query in LM-Studio] --> B[MCP Protocol]
-    B --> C[RAG Server Python Script]
-    C --> D{Tool Type?}
+```
+┌─────────────┐
+│  LM-Studio   │
+│  (MCP Client)│
+└──────┬──────┘
+       │
+┌──────▼────────────┐
+│   MCP Server      │
+│ (core/rag_        │
+│  processor.py)    │
+└──────┬────────────┘
+       │
+┌──────▼────────────┐      ┌──────────────┐
+│  RAG System       │──────│  Crawl4AI    │
+│  (operations/     │      │ (Docker:     │
+│   crawler.py)     │      │  port 11235) │
+└──────┬────────────┘      └──────────────┘
+       │
+┌──────▼────────────┐
+│  Vector Database  │
+│  (SQLite +        │
+│   sqlite-vec)     │
+└───────────────────┘
+```
 
-    D -->|Crawl| E[Crawl4AI Docker Container]
-    E --> F[Web Content Extraction]
-    F --> G[Content Processing & Chunking]
-    G --> H[Sentence Transformer Embeddings]
-    H --> I[SQLite + sqlite-vec Storage]
+## Installation Guide
 
-    D -->|Search| J[Query Embedding Generation]
-    J --> K[Vector Similarity Search]
-    K --> L[Relevant Content Retrieval]
+### Prerequisites
 
-    I --> M[Response to LM-Studio]
-    L --> M
-    M --> N[AI Model Processing]
-    N --> O[Enhanced Response to User]
+- Ubuntu/Linux system or macOS
+- Docker installed
+- Python 3.8 or higher
+- At least 4GB RAM available
+- 10GB free disk space
 
-    subgraph "Docker Container"
-        E
-    end
+### Quick Setup
 
-    subgraph "RAG Database"
-        I
-        style I fill:#e1f5fe
-    end
+1. **Clone repository**:
+```bash
+git clone https://github.com/Rob-P-Smith/mcpragcrawl4ai.git
+cd mcpragcrawl4ai
+```
 
-    subgraph "Python Environment"
-        C
-        G
-        H
-        J
-        K
-        style C fill:#f3e5f5
-    end
+2. **Install dependencies**:
+```bash
+python3 -m venv .venv
+source .venv/bin/activate  # Linux/Mac
+pip install -r requirements.txt
+```
+
+3. **Start Crawl4AI**:
+```bash
+docker run -d --name crawl4ai -p 11235:11235 unclecode/crawl4ai:latest
+```
+
+4. **Configure environment**:
+```bash
+cat > .env << EOF
+IS_SERVER=true
+LOCAL_API_KEY=$(openssl rand -base64 32)
+CRAWL4AI_URL=http://localhost:11235
+EOF
+```
+
+5. **Run MCP server**:
+```bash
+python3 core/rag_processor.py
+```
+
+For detailed instructions, see the [Quick Start Guide](guides/quick-start.md).
+
+## Project Structure
+
+### Core Components
+
+- **core/rag_processor.py**: Main MCP server implementation and JSON-RPC handling
+- **core/operations/crawler.py**: Web crawling logic and deep crawling functionality
+- **core/data/storage.py**: Database operations, content storage, and vector embeddings
+- **core/utilities/**: Helper scripts for testing and batch operations
+
+### API Layer
+
+- **api/api.py**: FastAPI server with all REST endpoints
+- **api/auth.py**: Authentication middleware and session management
+
+### Deployment Configurations
+
+- **deployments/server/**: Server deployment (REST API + MCP server in Docker)
+- **deployments/client/**: Client deployment (lightweight MCP client forwarder)
+
+## Available Tools
+
+The MCP server provides the following tools:
+
+### Basic Crawling
+1. **crawl_url** - Crawl without storing
+2. **crawl_and_remember** - Crawl and store permanently
+3. **crawl_temp** - Crawl and store temporarily (session-only)
+
+### Deep Crawling
+4. **deep_crawl_dfs** - Deep crawl multiple pages using depth-first search without storing
+5. **deep_crawl_and_store** - Deep crawl multiple pages using DFS and store all in knowledge base
+
+### Knowledge Management
+6. **search_memory** - Semantic search of stored content
+7. **list_memory** - List all stored content with optional filtering
+8. **forget_url** - Remove specific content by URL
+9. **clear_temp_memory** - Clear temporary session content
+
+## Deployment Options
+
+### Local Development
+Run directly on your machine with Python virtual environment.
+- [Local Development Guide](guides/deployment.md#local-development-environment)
+
+### Docker Server Deployment
+Full-featured server with REST API + MCP server in Docker.
+- [Server Deployment Guide](deployments.md#deployment-option-1-server-deployment)
+- [Server README](../deployments/server/README.md)
+
+### Docker Client Deployment
+Lightweight client forwarding requests to remote server.
+- [Client Deployment Guide](deployments.md#deployment-option-2-client-deployment)
+- [Client README](../deployments/client/README.md)
+
+## Configuration
+
+### Environment Variables
+
+**Core Settings:**
+- `IS_SERVER` - `true` for server mode, `false` for client mode
+- `SERVER_HOST` - Host to bind API server (default: `0.0.0.0`)
+- `SERVER_PORT` - Port for API server (default: `8080`)
+
+**Authentication:**
+- `LOCAL_API_KEY` - API key for server mode
+- `REMOTE_API_KEY` - API key for client mode
+- `REMOTE_API_URL` - Remote server URL for client mode
+
+**Database:**
+- `DB_PATH` - SQLite database path (default: `crawl4ai_rag.db`)
+
+**Services:**
+- `CRAWL4AI_URL` - Crawl4AI service URL (default: `http://localhost:11235`)
+
+### LM-Studio Configuration
+
+For local development:
+```json
+{
+  "mcpServers": {
+    "crawl4ai-rag": {
+      "command": "/path/to/.venv/bin/python3",
+      "args": ["/path/to/core/rag_processor.py"]
+    }
+  }
+}
+```
+
+For Docker server deployment:
+```json
+{
+  "mcpServers": {
+    "crawl4ai-rag": {
+      "command": "socat",
+      "args": ["-", "TCP:localhost:3000"]
+    }
+  }
+}
+```
+
+For Docker client deployment:
+```json
+{
+  "mcpServers": {
+    "crawl4ai-rag": {
+      "command": "docker",
+      "args": ["exec", "-i", "crawl4ai-mcp-client", "python3", "core/rag_processor.py"]
+    }
+  }
+}
+```
+
+## Features
+
+- **Local Homelab Deployment**: Runs entirely on your personal computer or home server
+- **MCP Integration**: Works seamlessly with LM-Studio and other MCP-compatible AI assistants
+- **Semantic Search**: Vector-based content retrieval using sqlite-vec
+- **Bidirectional Communication**: REST API layer supports both server and client modes
+- **Deep Crawling**: Advanced DFS crawling with customizable parameters (max depth 5, max pages 250)
+- **Content Management**: Full CRUD operations for stored content
+- **Security**: API key authentication and rate limiting
+- **Session Management**: Automatic cleanup of temporary content
+
+## Deep Crawling Features
+
+- **DFS Strategy**: Uses depth-first search to crawl multiple interconnected pages
+- **Configurable Depth**: Control how many levels deep to crawl (max 5 levels)
+- **Page Limits**: Restrict maximum pages crawled to prevent resource exhaustion (max 250 pages)
+- **External Links**: Option to follow or ignore external domain links
+- **URL Scoring**: Filter pages based on relevance scores (0.0-1.0 threshold)
+- **Bulk Storage**: Store all discovered pages in the knowledge base with automatic tagging
+
+## Data Persistence
+
+- **Database**: SQLite file in the configured location (default: `crawl4ai_rag.db`)
+- **Content Chunking**: Text split into 500-word chunks with 50-word overlap
+- **Retention Policies**: 'permanent', 'session_only', or time-based (e.g., '30_days')
+- **Deep Crawl Tags**: Automatically tagged with 'deep_crawl' and depth information
+- **Vector Embeddings**: 384-dimensional vectors using sentence-transformers 'all-MiniLM-L6-v2'
+
+## Development Commands
+
+### Running the MCP Server
+```bash
+# Run the main MCP server (local mode)
+python3 core/rag_processor.py
+
+# Run in client mode (forwards to remote API)
+# First set IS_SERVER=false in .env
+python3 core/rag_processor.py
+```
+
+### Running the REST API Server
+```bash
+# Start API server (server mode)
+python3 deployments/server/start_api_server.py
+
+# Or use uvicorn directly
+uvicorn api.api:create_app --host 0.0.0.0 --port 8080
+```
+
+### Testing
+```bash
+# Test sqlite-vec installation
+python3 core/utilities/test_sqlite_vec.py
+
+# Test database operations
+python3 core/utilities/dbstats.py
+
+# Test batch crawling functionality
+python3 core/utilities/batch_crawler.py
+```
+
+### Docker Operations
+```bash
+# Server Deployment (REST API + MCP Server)
+docker compose -f deployments/server/docker-compose.yml up -d
+docker compose -f deployments/server/docker-compose.yml logs -f
+docker compose -f deployments/server/docker-compose.yml down
+
+# Client Deployment (MCP Client only)
+docker compose -f deployments/client/docker-compose.yml up -d
+docker compose -f deployments/client/docker-compose.yml logs -f
+docker compose -f deployments/client/docker-compose.yml down
+
+# Standalone Crawl4AI service
+docker run -d --name crawl4ai -p 11235:11235 unclecode/crawl4ai:latest
 ```
 
 ## Troubleshooting
 
-### Common Issues
+For common issues and solutions, see the [Troubleshooting Guide](guides/troubleshooting.md).
 
-**Container not starting:**
+### Quick Diagnostics
 
+**Check Services:**
 ```bash
-docker-compose logs crawl4ai
+# Check Docker containers
+docker ps
+
+# Check ports
+sudo lsof -i :8080  # REST API
+sudo lsof -i :3000  # MCP Server
+sudo lsof -i :11235 # Crawl4AI
 ```
 
-**Python import errors:**
-
+**Test Connectivity:**
 ```bash
-source crawl4ai_rag_env/bin/activate
-pip list | grep -E "(sentence|sqlite|numpy|requests)"
+# Test REST API
+curl http://localhost:8080/health
+
+# Test Crawl4AI
+curl http://localhost:11235/
 ```
 
-**MCP connection issues:**
-
-- Check LM-Studio logs in the application
-- Verify file paths in mcp.json are absolute
-- Ensure script has execute permissions
-
-**Memory issues:**
-
-- Increase Docker container memory if needed
-- Monitor system RAM usage during model loading
-
-### Log Files
-
-**Error logs:** `~/crawl4ai_rag_errors.log`
-**Docker logs:** `docker-compose logs crawl4ai`
-**LM-Studio logs:** Available in LM-Studio application
-
----
-
-# API Documentation
-
-## RAGDatabase Class (data/storage.py)
-
-### `__init__(self, db_path: str = "crawl4ai_rag.db")`
-
-**Purpose:** Initialize the RAG database with SQLite and vector capabilities
-**Parameters:**
-
-- `db_path` (str): Path to SQLite database file, defaults to "crawl4ai_rag.db"
-  **Functionality:** Sets up database connection, loads sqlite-vec extension, creates tables, generates session ID
-
-### `load_sqlite_vec(self, db)`
-
-**Purpose:** Load the sqlite-vec extension for vector operations
-**Parameters:**
-
-- `db` (sqlite3.Connection): Database connection object
-  **Returns:** Database connection with vector extension loaded
-  **Functionality:** Enables extension loading and loads vec0.so from sqlite-vec package
-
-### `init_database(self)`
-
-**Purpose:** Create database schema for content and vector storage
-**Parameters:** None
-**Functionality:** Creates tables for crawled_content, sessions, and content_vectors virtual table
-
-### `chunk_content(self, content: str, chunk_size: int = 500, overlap: int = 50) -> List[str]`
-
-**Purpose:** Split content into overlapping chunks for embedding
-**Parameters:**
-
-- `content` (str): Text content to chunk
-- `chunk_size` (int): Number of words per chunk, default 500
-- `overlap` (int): Number of overlapping words between chunks, default 50
-  **Returns:** List of text chunks
-  **Functionality:** Splits text by words with sliding window approach
-
-### `store_content(self, url: str, title: str, content: str, markdown: str, retention_policy: str = 'permanent', tags: str = '') -> int`
-
-**Purpose:** Store content in database and generate embeddings
-**Parameters:**
-
-- `url` (str): Source URL of content
-- `title` (str): Page title
-- `content` (str): Cleaned HTML content
-- `markdown` (str): Markdown version of content
-- `retention_policy` (str): Storage policy ('permanent', 'session_only', '30_days')
-- `tags` (str): Comma-separated tags for organization
-  **Returns:** Content ID of stored item
-  **Functionality:** Stores content with metadata, generates embeddings for chunks
-
-### `generate_embeddings(self, content_id: int, content: str)`
-
-**Purpose:** Create vector embeddings for content chunks
-**Parameters:**
-
-- `content_id` (int): Database ID of the content
-- `content` (str): Text content to embed
-  **Functionality:** Chunks content, generates embeddings using sentence transformer, stores in vector table
-
-### `search_similar(self, query: str, limit: int = 5) -> List[Dict]`
-
-**Purpose:** Find semantically similar content using vector search
-**Parameters:**
-
-- `query` (str): Search query text
-- `limit` (int): Maximum number of results, default 5
-  **Returns:** List of dictionaries with url, title, content, timestamp, tags, similarity_score
-  **Functionality:** Embeds query, performs vector similarity search, returns ranked results
-
-### `list_content(self, retention_policy: Optional[str] = None) -> List[Dict]`
-
-**Purpose:** List stored content with optional filtering
-**Parameters:**
-
-- `retention_policy` (Optional[str]): Filter by policy type, None for all content
-  **Returns:** List of content metadata dictionaries
-  **Functionality:** Queries database for content list, optionally filtered by retention policy
-
-### `remove_content(self, url: str = None, session_only: bool = False) -> int`
-
-**Purpose:** Remove content from database
-**Parameters:**
-
-- `url` (str): Specific URL to remove, None for bulk operations
-- `session_only` (bool): Remove only session content if True
-  **Returns:** Number of items removed
-  **Functionality:** Deletes content based on URL or session criteria
-
-## Crawl4AIRAG Class (operations/crawler.py)
-
-### `__init__(self)`
-
-**Purpose:** Initialize the RAG system with database and crawler URL
-**Parameters:** None
-**Functionality:** Sets Crawl4AI endpoint, initializes RAGDatabase instance
-
-### `crawl_url(self, url: str, return_full_content: bool = False) -> Dict[str, Any]`
-
-**Purpose:** Crawl a URL and return content with optional full content mode
-**Parameters:**
-
-- `url` (str): URL to crawl
-- `return_full_content` (bool): If True, return full content; if False, return preview
-  **Returns:** Dictionary with success status, title, content/preview, and metadata
-  **Functionality:** Makes HTTP request to Crawl4AI, processes response, returns appropriate content format
-
-### `crawl_and_store(self, url: str, retention_policy: str = 'permanent', tags: str = '') -> Dict[str, Any]`
-
-**Purpose:** Crawl URL and store content in RAG database
-**Parameters:**
-
-- `url` (str): URL to crawl and store
-- `retention_policy` (str): Storage policy for content
-- `tags` (str): Tags for content organization
-  **Returns:** Dictionary with success status, storage confirmation, and content preview
-  **Functionality:** Crawls content, stores in database, generates embeddings, returns summary
-
-### `search_knowledge(self, query: str, limit: int = 5) -> Dict[str, Any]`
-
-**Purpose:** Search stored knowledge using semantic similarity
-**Parameters:**
-
-- `query` (str): Search query
-- `limit` (int): Maximum results to return
-  **Returns:** Dictionary with search results and metadata
-  **Functionality:** Performs vector search on stored content, returns ranked results
-
-### `deep_crawl_dfs(self, url: str, max_depth: int = 2, max_pages: int = 10, include_external: bool = False, score_threshold: float = 0.0, timeout: int = None) -> Dict[str, Any]`
-
-**Purpose:** Deep crawl multiple pages using depth-first search without storing
-**Parameters:**
-
-- `url` (str): Starting URL for deep crawl
-- `max_depth` (int): Maximum depth to crawl (1-5, default 2)
-- `max_pages` (int): Maximum pages to crawl (1-250, default 10)
-- `include_external` (bool): Follow external domain links (default False)
-- `score_threshold` (float): Minimum relevance score (0.0-1.0, default 0.0)
-- `timeout` (int): Maximum crawl time in seconds (default 300)
-  **Returns:** Dictionary with crawl results, page previews, and metadata
-  **Functionality:** Discovers links, follows them recursively, returns content previews
-
-### `deep_crawl_and_store(self, url: str, retention_policy: str = 'permanent', tags: str = '', max_depth: int = 2, max_pages: int = 10, include_external: bool = False, score_threshold: float = 0.0, timeout: int = None) -> Dict[str, Any]`
-
-**Purpose:** Deep crawl multiple pages and store all content in RAG database
-**Parameters:**
-
-- `url` (str): Starting URL for deep crawl
-- `retention_policy` (str): Storage policy ('permanent', 'session_only', etc.)
-- `tags` (str): Tags for content organization (auto-adds 'deep_crawl')
-- `max_depth` (int): Maximum depth to crawl (1-5, default 2)
-- `max_pages` (int): Maximum pages to crawl (1-250, default 10)
-- `include_external` (bool): Follow external domain links (default False)
-- `score_threshold` (float): Minimum relevance score (0.0-1.0, default 0.0)
-- `timeout` (int): Maximum crawl time in seconds (default 300)
-  **Returns:** Dictionary with storage results, success/failure counts, and stored page summaries
-  **Functionality:** Performs deep crawl then stores all discovered content with embeddings
-
-## MCPServer Class (core/rag_processor.py)
-
-### `__init__(self)`
-
-**Purpose:** Initialize MCP server with RAG system and tool definitions
-**Parameters:** None
-**Functionality:** Sets up RAG instance, defines available tools with schemas
-
-### `handle_request(self, request) -> Dict`
-
-**Purpose:** Process incoming MCP JSON-RPC requests
-**Parameters:**
-
-- `request` (Dict): JSON-RPC request object
-  **Returns:** JSON-RPC response dictionary
-  **Functionality:** Routes requests to appropriate handlers (initialize, tools/list, tools/call)
-
-## Available MCP Tools
-
-### `crawl_url`
-
-**Purpose:** Crawl URL without storing content
-**Arguments:**
-
-- `url` (string, required): URL to crawl
-  **Returns:** Content preview and metadata
-
-### `crawl_and_remember`
-
-**Purpose:** Crawl URL and store permanently in knowledge base
-**Arguments:**
-
-- `url` (string, required): URL to crawl
-- `tags` (string, optional): Organization tags
-  **Returns:** Storage confirmation and content preview
-
-### `crawl_temp`
-
-**Purpose:** Crawl URL and store temporarily (session only)
-**Arguments:**
-
-- `url` (string, required): URL to crawl
-- `tags` (string, optional): Organization tags
-  **Returns:** Storage confirmation and content preview
-
-### `deep_crawl_dfs`
-
-**Purpose:** Deep crawl multiple pages without storing (preview only)
-**Arguments:**
-
-- `url` (string, required): Starting URL for deep crawl
-- `max_depth` (integer, optional): Maximum depth to crawl (1-5, default 2)
-- `max_pages` (integer, optional): Maximum pages to crawl (1-250, default 10)
-- `include_external` (boolean, optional): Follow external domain links (default false)
-- `score_threshold` (number, optional): Minimum relevance score (0.0-1.0, default 0.0)
-- `timeout` (integer, optional): Maximum crawl time in seconds (default 300)
-  **Returns:** List of discovered pages with content previews and metadata
-
-### `deep_crawl_and_store`
-
-**Purpose:** Deep crawl multiple pages and store all in knowledge base
-**Arguments:**
-
-- `url` (string, required): Starting URL for deep crawl
-- `retention_policy` (string, optional): Storage policy (default 'permanent')
-- `tags` (string, optional): Organization tags (auto-adds 'deep_crawl')
-- `max_depth` (integer, optional): Maximum depth to crawl (1-5, default 2)
-- `max_pages` (integer, optional): Maximum pages to crawl (1-250, default 10)
-- `include_external` (boolean, optional): Follow external domain links (default false)
-- `score_threshold` (number, optional): Minimum relevance score (0.0-1.0, default 0.0)
-- `timeout` (integer, optional): Maximum crawl time in seconds (default 300)
-  **Returns:** Storage summary with success/failure counts and stored page details
-
-### `search_memory`
-
-**Purpose:** Search stored knowledge using semantic similarity
-**Arguments:**
-
-- `query` (string, required): Search query
-- `limit` (integer, optional): Number of results (default 5)
-  **Returns:** Ranked list of relevant content
-
-### `list_memory`
-
-**Purpose:** List all stored content in knowledge base
-**Arguments:**
-
-- `filter` (string, optional): Filter by retention policy
-  **Returns:** List of stored content metadata
-
-### `forget_url`
-
-**Purpose:** Remove specific content by URL
-**Arguments:**
-
-- `url` (string, required): URL to remove
-  **Returns:** Removal confirmation
-
-### `clear_temp_memory`
-
-**Purpose:** Clear all temporary content from current session
-**Arguments:** None
-**Returns:** Count of removed items
-
-## Error Handling
-
-The system includes comprehensive error logging to `crawl4ai_rag_errors.log` with format:
-
-```
-timestamp|function_name|url|error_message|error_code|stack_trace
+**View Logs:**
+```bash
+# Application errors
+tail -f data/crawl4ai_rag_errors.log
+
+# Docker logs
+docker logs crawl4ai
+docker logs crawl4ai-rag-server
 ```
 
-All major functions include try-catch blocks with detailed error logging for debugging and monitoring.
+## Support
+
+- [GitHub Issues](https://github.com/Rob-P-Smith/mcpragcrawl4ai/issues)
+- [AGENTS.md](../AGENTS.md) - Developer guide
+- [Troubleshooting Guide](guides/troubleshooting.md)
+- [Deployment Guide](deployments.md)

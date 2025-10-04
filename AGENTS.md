@@ -22,12 +22,15 @@ This is a Crawl4AI RAG (Retrieval-Augmented Generation) MCP Server implementatio
 
 ### File Structure
 - **core/rag_processor.py**: Main MCP server implementation and JSON-RPC handling
-- **operations/crawler.py**: Web crawling logic and deep crawling functionality
-- **data/storage.py**: Database operations, content storage, and vector embeddings
-- **utilities/**: Helper scripts for testing and batch operations
+- **core/operations/crawler.py**: Web crawling logic and deep crawling functionality
+- **core/data/storage.py**: Database operations, content storage, and vector embeddings
+- **core/utilities/**: Helper scripts for testing and batch operations
 - **api/**: REST API module for bidirectional communication
   - **api/api.py**: FastAPI server with all REST endpoints
   - **api/auth.py**: Authentication middleware and session management
+- **deployments/**: Deployment configurations
+  - **deployments/server/**: Server deployment (REST API + MCP server in Docker)
+  - **deployments/client/**: Client deployment (lightweight MCP client forwarder)
 
 ### Database Schema
 - **crawled_content**: Stores web content with metadata, retention policies, and session tracking
@@ -60,7 +63,7 @@ python3 core/rag_processor.py
 ### Running the REST API Server
 ```bash
 # Start API server (server mode)
-python3 start_api_server.py
+python3 deployments/server/start_api_server.py
 
 # Or use uvicorn directly
 uvicorn api.api:create_app --host 0.0.0.0 --port 8080
@@ -72,28 +75,31 @@ pip install -r requirements.txt
 ### Testing
 ```bash
 # Test sqlite-vec installation
-python3 utilities/test_sqlite_vec.py
+python3 core/utilities/test_sqlite_vec.py
 
 # Test database operations
-python3 utilities/dbstats.py
+python3 core/utilities/dbstats.py
 
 # Test batch crawling functionality
-python3 utilities/batch_crawler.py
+python3 core/utilities/batch_crawler.py
 ```
 
 ### Docker Operations
 ```bash
-# Start Crawl4AI service
-docker-compose up -d
+# Server Deployment (REST API + MCP Server)
+docker compose -f deployments/server/docker-compose.yml up -d
+docker compose -f deployments/server/docker-compose.yml logs -f
+docker compose -f deployments/server/docker-compose.yml down
 
-# Check service status
-docker-compose ps
+# Client Deployment (MCP Client only)
+docker compose -f deployments/client/docker-compose.yml up -d
+docker compose -f deployments/client/docker-compose.yml logs -f
+docker compose -f deployments/client/docker-compose.yml down
 
-# View logs
-docker-compose logs crawl4ai
-
-# Stop services
-docker-compose down
+# Standalone Crawl4AI service (if needed)
+docker run -d --name crawl4ai -p 11235:11235 unclecode/crawl4ai:latest
+docker logs crawl4ai
+docker stop crawl4ai
 ```
 
 The server expects JSON-RPC 2.0 requests via stdin and responds via stdout. Errors are logged to both stderr and the log file.

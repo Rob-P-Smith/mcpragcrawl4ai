@@ -240,19 +240,40 @@ def create_app() -> FastAPI:
 
     # List stored content
     @app.get("/api/v1/memory")
-    async def list_memory(filter: Optional[str] = None, session_info: Dict = Depends(verify_api_key)):
+    async def list_memory(
+        filter: Optional[str] = None,
+        limit: Optional[int] = 100,
+        session_info: Dict = Depends(verify_api_key)
+    ):
         try:
             if filter:
                 filter = validate_string_length(filter, 500, "filter")
 
-            content = GLOBAL_DB.list_content(filter)
+            # Enforce limit bounds
+            limit = min(max(1, limit or 100), 1000)
+
+            result = GLOBAL_DB.list_content(filter, limit)
             return {
                 "success": True,
-                "data": {"content": content, "count": len(content)},
+                "data": result,
                 "timestamp": datetime.now().isoformat()
             }
         except Exception as e:
             log_error("api_list_memory", e)
+            raise HTTPException(status_code=500, detail=str(e))
+
+    # Get database statistics
+    @app.get("/api/v1/stats")
+    async def get_database_stats(session_info: Dict = Depends(verify_api_key)):
+        try:
+            stats = GLOBAL_DB.get_database_stats()
+            return {
+                "success": True,
+                "data": stats,
+                "timestamp": datetime.now().isoformat()
+            }
+        except Exception as e:
+            log_error("api_get_stats", e)
             raise HTTPException(status_code=500, detail=str(e))
 
     # Remove specific content
@@ -366,9 +387,16 @@ class APIClient:
             "query": query, "limit": limit
         })
 
-    async def list_memory(self, filter: Optional[str] = None) -> Dict[str, Any]:
-        params = {"filter": filter} if filter else None
-        return await self.make_request("GET", "/api/v1/memory", params)
+    async def list_memory(self, filter: Optional[str] = None, limit: int = 100) -> Dict[str, Any]:
+        params = {}
+        if filter:
+            params["filter"] = filter
+        if limit:
+            params["limit"] = limit
+        return await self.make_request("GET", "/api/v1/memory", params if params else None)
+
+    async def get_database_stats(self) -> Dict[str, Any]:
+        return await self.make_request("GET", "/api/v1/stats")
 
     async def forget_url(self, url: str) -> Dict[str, Any]:
         return await self.make_request("DELETE", "/api/v1/memory", {"url": url})

@@ -10,3 +10,4 @@ crawl4ai_rag.db
 .coverage
 **/.env
 data/
+backups/

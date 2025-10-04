@@ -42,10 +42,13 @@ REMOTE_API_KEY=your-remote-api-key-here
 
 ```bash
 # Option 1: Using the startup script
-python3 start_api_server.py
+python3 deployments/server/start_api_server.py
 
 # Option 2: Using uvicorn directly
 uvicorn api.api:create_app --host 0.0.0.0 --port 8080
+
+# Option 3: Using Docker
+docker compose -f deployments/server/docker-compose.yml up -d
 ```
 
 ### 4. Run in Client Mode
@@ -57,11 +60,13 @@ python3 core/rag_processor.py
 
 ## Documentation
 
-- [API Reference](api/)
-- [Docker Setup Guide](docker/)
-- [Quick Start Guide](guides/quick-start.md)
-- [Deployment Guide](guides/deployment.md)
-- [Troubleshooting](guides/troubleshooting.md)
+- **[Deployment Guide](deployments.md)** - Comprehensive deployment options (Server, Client, Local)
+- [Quick Start Guide](guides/quick-start.md) - Get up and running quickly
+- [Installation Guide](README.md) - Detailed setup instructions
+- [API Reference](api/) - REST API documentation
+- [API Endpoints](API_README.md) - Complete API documentation
+- [Docker Setup Guide](docker/) - Docker deployment
+- [Troubleshooting](guides/troubleshooting.md) - Common issues and solutions
 
 ## Architecture
 <img src="Diagram.svg" alt="Architecture Diagram" style="width: 50%; height: auto; display: block; margin: 0 auto;">
