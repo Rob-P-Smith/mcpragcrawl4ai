@@ -307,13 +307,7 @@ class RAGDatabase:
 
     def get_database_stats(self) -> Dict[str, Any]:
         """Get comprehensive database statistics"""
-        import sys
-        import os as _os
-        # Add utilities path to sys.path if not already there
-        utilities_path = _os.path.join(_os.path.dirname(_os.path.dirname(__file__)), 'utilities')
-        if utilities_path not in sys.path:
-            sys.path.insert(0, utilities_path)
-        from dbstats import get_db_stats_dict
+        from core.utilities.dbstats import get_db_stats_dict
         return get_db_stats_dict(self.db_path)
 
     def remove_content(self, url: str = None, session_only: bool = False) -> int:
