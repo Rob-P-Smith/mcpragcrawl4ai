@@ -18,7 +18,6 @@ if IS_CLIENT_MODE:
     GLOBAL_RAG = None
     print("🔗 Running in CLIENT mode - API calls will be forwarded to remote server", file=sys.stderr, flush=True)
 else:
-    # Get Crawl4AI URL from environment, default to localhost
     crawl4ai_url = os.getenv("CRAWL4AI_URL", "http://localhost:11235")
     GLOBAL_RAG = Crawl4AIRAG(crawl4ai_url=crawl4ai_url)
     print(f"🏠 Running in SERVER mode - using local RAG system (Crawl4AI: {crawl4ai_url})", file=sys.stderr, flush=True)
@@ -76,12 +75,21 @@ class MCPServer:
             },
             {
                 "name": "list_memory",
-                "description": "List all stored content in the knowledge base",
+                "description": "List all stored content in the knowledge base (limited to 100 results by default)",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "filter": {"type": "string", "description": "Filter by retention policy (permanent, session_only, 30_days)"}
+                        "filter": {"type": "string", "description": "Filter by retention policy (permanent, session_only, 30_days)"},
+                        "limit": {"type": "integer", "description": "Maximum number of results to return (default 100, max 1000)"}
                     }
+                }
+            },
+            {
+                "name": "db_stats",
+                "description": "Get comprehensive database statistics including record counts, storage size, and recent activity",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {}
                 }
             },
             {
@@ -219,15 +227,24 @@ class MCPServer:
                     filter_param = arguments.get("filter")
                     if filter_param:
                         filter_param = validate_string_length(filter_param, 500, "filter")
+                    limit = validate_integer_range(arguments.get("limit", 100), 1, 1000, "limit")
                     if IS_CLIENT_MODE:
-                        api_result = await api_client.list_memory(filter_param)
+                        api_result = await api_client.list_memory(filter_param, limit)
                         result = api_result.get("data", api_result)
                     else:
+                        list_result = GLOBAL_DB.list_content(filter_param, limit)
                         result = {
                             "success": True,
-                            "content": GLOBAL_DB.list_content(filter_param)
+                            **list_result
                         }
-                
+
+                elif tool_name == "db_stats":
+                    if IS_CLIENT_MODE:
+                        api_result = await api_client.get_database_stats()
+                        result = api_result.get("data", api_result)
+                    else:
+                        result = await self.rag.get_database_stats()
+
                 elif tool_name == "forget_url":
                     url = arguments["url"]
                     if not validate_url(url):

@@ -246,22 +246,47 @@ class RAGDatabase:
             log_error("search_similar", e)
             raise
 
-    def list_content(self, retention_policy: Optional[str] = None) -> List[Dict]:
+    def list_content(self, retention_policy: Optional[str] = None, limit: int = 100) -> Dict[str, Any]:
+        """
+        List stored content with optional filtering and limit
+
+        Args:
+            retention_policy: Filter by retention policy
+            limit: Maximum number of results to return (default 100, max 1000)
+
+        Returns:
+            Dictionary with content list, count, and metadata
+        """
+        # Enforce reasonable limits
+        limit = min(max(1, limit), 1000)
+
+        # Get total count
         if retention_policy:
+            total_count = self.execute_with_retry('''
+                SELECT COUNT(*) FROM crawled_content
+                WHERE retention_policy = ?
+            ''', (retention_policy,)).fetchone()[0]
+
             results = self.execute_with_retry('''
                 SELECT url, title, timestamp, retention_policy, tags
                 FROM crawled_content
                 WHERE retention_policy = ?
                 ORDER BY timestamp DESC
-            ''', (retention_policy,)).fetchall()
+                LIMIT ?
+            ''', (retention_policy, limit)).fetchall()
         else:
+            total_count = self.execute_with_retry('''
+                SELECT COUNT(*) FROM crawled_content
+            ''').fetchone()[0]
+
             results = self.execute_with_retry('''
                 SELECT url, title, timestamp, retention_policy, tags
                 FROM crawled_content
                 ORDER BY timestamp DESC
-            ''').fetchall()
+                LIMIT ?
+            ''', (limit,)).fetchall()
 
-        return [
+        content_list = [
             {
                 'url': row[0],
                 'title': row[1],
@@ -271,6 +296,19 @@ class RAGDatabase:
             }
             for row in results
         ]
+
+        return {
+            'content': content_list,
+            'count': len(content_list),
+            'total_count': total_count,
+            'limited': total_count > limit,
+            'limit': limit
+        }
+
+    def get_database_stats(self) -> Dict[str, Any]:
+        """Get comprehensive database statistics"""
+        from core.utilities.dbstats import get_db_stats_dict
+        return get_db_stats_dict(self.db_path)
 
     def remove_content(self, url: str = None, session_only: bool = False) -> int:
         try:

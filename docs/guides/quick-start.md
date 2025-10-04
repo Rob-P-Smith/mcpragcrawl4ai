@@ -5,50 +5,44 @@ This guide provides step-by-step instructions for getting started with the Crawl
 ## Prerequisites
 
 - Ubuntu/Linux system
-- Docker and docker-compose installed
+- Docker installed
 - Python 3.8 or higher
-- LM-Studio installed
+- LM-Studio installed (optional)
 - At least 4GB RAM available
 - 10GB free disk space
 
-## Step 1: Setup Docker Container
-
-Create the Docker configuration for Crawl4AI:
+## Step 1: Clone Repository
 
 ```bash
-# Create docker-compose.yml
-cat > docker-compose.yml << 'EOF'
-services:
-  crawl4ai:
-    image: unclecode/crawl4ai:latest
-    container_name: crawl4ai
-    ports:
-      - "11235:11235"
-    shm_size: '1gb'
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11235/"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-    environment:
-      - LOG_LEVEL=INFO
-EOF
-
-# Start the container
-docker-compose up -d
-
-# Verify container is running
-docker-compose ps
+git clone https://github.com/Rob-P-Smith/mcpragcrawl4ai.git
+cd mcpragcrawl4ai
 ```
 
-## Step 2: Test Docker Container
+## Step 2: Setup Crawl4AI Service
+
+Start the Crawl4AI Docker container:
+
+```bash
+# Quick start - single command
+docker run -d \
+  --name crawl4ai \
+  --network crawler_default \
+  -p 11235:11235 \
+  --shm-size=1gb \
+  --restart unless-stopped \
+  unclecode/crawl4ai:latest
+
+# Verify container is running
+docker ps | grep crawl4ai
+```
+
+## Step 3: Test Crawl4AI Service
 
 Verify the Crawl4AI container is working:
 
 ```bash
-# Wait for container to be healthy
-sleep 30
+# Wait for container to be ready
+sleep 10
 
 # Test basic connectivity
 curl http://localhost:11235/
@@ -61,104 +55,71 @@ curl -X POST http://localhost:11235/crawl \
 
 Expected response should include `"success": true` and crawled content.
 
-## Step 3: Create Python Virtual Environment
+## Step 4: Create Python Virtual Environment
 
 ```bash
 # Create virtual environment
-python3 -m venv crawl4ai_rag_env
+python3 -m venv .venv
 
 # Activate environment
-source crawl4ai_rag_env/bin/activate
+source .venv/bin/activate  # Linux/Mac
+# or
+.venv\Scripts\activate  # Windows
 
 # Upgrade pip
 pip install --upgrade pip
 ```
 
-## Step 4: Install Dependencies
+## Step 5: Install Dependencies
 
-Install all required Python packages:
-
-```bash
-# Core dependencies
-pip install sentence-transformers==5.1.0
-pip install sqlite-vec==0.1.6
-pip install numpy==2.3.2
-pip install requests==2.32.5
-
-# Additional dependencies that may be required
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-pip install transformers==4.56.1
-pip install huggingface-hub
-```
-
-## Step 5: Test sqlite-vec Installation
-
-Run the test script to verify sqlite-vec is working:
+Install all required Python packages from requirements.txt:
 
 ```bash
-python test_sqlite_vec.py
+pip install -r requirements.txt
 ```
 
-## Step 6: Test Sentence Transformers
+This installs:
+- sentence-transformers (for embeddings)
+- sqlite-vec (for vector search)
+- FastAPI & uvicorn (for REST API)
+- And all other dependencies
 
-Verify the sentence transformer model loads correctly:
+## Step 6: Configure Environment
+
+Create a `.env` file in the project root:
 
 ```bash
-python -c "
-from sentence_transformers import SentenceTransformer
-print('Loading model...')
-model = SentenceTransformer('all-MiniLM-L6-v2')
-print('✓ Model loaded successfully')
-test_text = ['Hello world', 'Testing embeddings']
-embeddings = model.encode(test_text)
-print(f'✓ Embeddings generated: {embeddings.shape}')
-"
+cat > .env << EOF
+IS_SERVER=true
+LOCAL_API_KEY=$(openssl rand -base64 32)
+DB_PATH=./data/crawl4ai_rag.db
+CRAWL4AI_URL=http://localhost:11235
+LOG_LEVEL=INFO
+EOF
 ```
 
-## Step 7: Add RAG Server Script
-
-Create the main RAG server script. Copy the complete `crawl4ai_rag_optimized.py` script to your home directory and make it executable:
-
-```bash
-# Make script executable
-chmod +x crawl4ai_rag_optimized.py
-
-# Test script initialization
-python crawl4ai_rag_optimized.py &
-SCRIPT_PID=$!
-sleep 5
-kill $SCRIPT_PID
-
-# You should see:
-# Initializing RAG system...
-# RAG system ready!
-```
-
-## Step 8: Test RAG Server Manually
+## Step 7: Test MCP Server
 
 Test the MCP server with manual JSON-RPC calls:
 
 ```bash
 # Test tools listing
-echo '{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}' | python crawl4ai_rag_optimized.py
+echo '{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}' | python3 core/rag_processor.py
 
 # Test crawling and storing
-echo '{"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "crawl_and_remember", "arguments": {"url": "https://httpbin.org/html"}}}' | python crawl4ai_rag_optimized.py
-
-# Test search functionality
-echo '{"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "search_memory", "arguments": {"query": "test content"}}}' | python crawl4ai_rag_optimized.py
+echo '{"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "crawl_and_remember", "arguments": {"url": "https://httpbin.org/html"}}}' | python3 core/rag_processor.py
 ```
 
-## Step 9: Configure LM-Studio MCP
+## Step 8: Configure LM-Studio (Optional)
 
-Update LM-Studio's MCP configuration file:
+If using LM-Studio, update the MCP configuration:
 
 ```bash
 # Get the full paths
-VENV_PATH=$(pwd)/crawl4ai_rag_env
-SCRIPT_PATH=$(pwd)/crawl4ai_rag_optimized.py
+VENV_PATH=$(pwd)/.venv
+SCRIPT_PATH=$(pwd)/core/rag_processor.py
 
-echo "Virtual Environment: $VENV_PATH"
+echo "Virtual Environment: $VENV_PATH/bin/python3"
 echo "Script Path: $SCRIPT_PATH"
 ```
 
@@ -168,19 +129,16 @@ In LM-Studio, go to **Program → View MCP Configuration** and update `mcp.json`
 {
   "mcpServers": {
     "crawl4ai-rag": {
-      "command": "/home/YOUR_USERNAME/crawl4ai_rag_env/bin/python",
-      "args": ["/home/YOUR_USERNAME/crawl4ai_rag_optimized.py"],
-      "env": {
-        "PYTHONPATH": "/home/YOUR_USERNAME/crawl4ai_rag_env/lib/python3.11/site-packages"
-      }
+      "command": "/full/path/to/.venv/bin/python3",
+      "args": ["/full/path/to/core/rag_processor.py"]
     }
   }
 }
 ```
 
-Replace `YOUR_USERNAME` with your actual username and adjust Python version as needed.
+Replace with your actual absolute paths.
 
-## Step 10: Verify LM-Studio Integration
+## Step 9: Verify LM-Studio Integration
 
 1. **Restart LM-Studio completely** (close and reopen)
 2. **Check Integrations panel** - should show `crawl4ai-rag` with blue toggle
@@ -190,11 +148,11 @@ Replace `YOUR_USERNAME` with your actual username and adjust Python version as n
    - `crawl_url` - Crawl single page without storing
    - `crawl_and_remember` - Crawl single page and store permanently
    - `crawl_temp` - Crawl single page and store temporarily
-   
+
    **Deep Crawling Tools:**
-   - `deep_crawl_dfs` - Deep crawl multiple pages without storing (preview only)
-   - `deep_crawl_and_store` - Deep crawl and store all pages permanently
-   
+   - `deep_crawl_dfs` - Deep crawl multiple pages without storing
+   - `deep_crawl_and_store` - Deep crawl and store all pages
+
    **Knowledge Management:**
    - `search_memory` - Search stored content using semantic similarity
    - `list_memory` - List all stored content
@@ -202,3 +160,10 @@ Replace `YOUR_USERNAME` with your actual username and adjust Python version as n
    - `clear_temp_memory` - Clear session content
 
 4. **Test with simple command**: "List what's in memory"
+
+## Alternative: Docker Deployment
+
+For a production-ready deployment, see the [Deployment Guide](../deployments.md) for Docker-based options:
+
+- **Server Deployment**: Full REST API + MCP server in Docker
+- **Client Deployment**: Lightweight client forwarding to remote server
