@@ -135,6 +135,94 @@ def create_app() -> FastAPI:
     async def health_check():
         return {"status": "healthy", "timestamp": datetime.now().isoformat()}
 
+    # Help endpoint - List all available tools
+    @app.get("/api/v1/help")
+    async def get_help():
+        help_data = {
+            "success": True,
+            "tools": [
+                {
+                    "name": "crawl_url",
+                    "example": "Crawl http://www.example.com without storing",
+                    "parameters": "url: string"
+                },
+                {
+                    "name": "crawl_and_store",
+                    "example": "Crawl and permanently store https://github.com/anthropics/anthropic-sdk-python",
+                    "parameters": "url: string, tags?: string, retention_policy?: string"
+                },
+                {
+                    "name": "crawl_temp",
+                    "example": "Crawl and temporarily store https://news.ycombinator.com",
+                    "parameters": "url: string, tags?: string"
+                },
+                {
+                    "name": "deep_crawl_and_store",
+                    "example": "Deep crawl https://docs.python.org starting from main page",
+                    "parameters": "url: string, max_depth?: number (1-5, default 2), max_pages?: number (1-250, default 10), retention_policy?: string, tags?: string, include_external?: boolean, score_threshold?: number (0.0-1.0), timeout?: number (60-1800)"
+                },
+                {
+                    "name": "search_knowledge",
+                    "example": "Search for 'async python patterns' in stored knowledge",
+                    "parameters": "query: string, limit?: number (default 5, max 1000)"
+                },
+                {
+                    "name": "list_memory",
+                    "example": "List all stored pages or filter by retention policy",
+                    "parameters": "filter?: string (permanent|session_only|30_days), limit?: number (default 100, max 1000)"
+                },
+                {
+                    "name": "get_database_stats",
+                    "example": "Get database statistics including record counts and storage size",
+                    "parameters": "none"
+                },
+                {
+                    "name": "list_domains",
+                    "example": "List all unique domains stored (e.g., github.com, docs.python.org)",
+                    "parameters": "none"
+                },
+                {
+                    "name": "add_blocked_domain",
+                    "example": "Block all .ru domains or URLs containing 'spam'",
+                    "parameters": "pattern: string (e.g., *.ru, *.cn, *spam*, example.com), description?: string"
+                },
+                {
+                    "name": "remove_blocked_domain",
+                    "example": "Unblock a previously blocked domain pattern",
+                    "parameters": "pattern: string, keyword: string (authorization)"
+                },
+                {
+                    "name": "list_blocked_domains",
+                    "example": "Show all currently blocked domain patterns",
+                    "parameters": "none"
+                },
+                {
+                    "name": "forget_url",
+                    "example": "Remove specific URL from knowledge base",
+                    "parameters": "url: string"
+                },
+                {
+                    "name": "clear_temp_memory",
+                    "example": "Clear all temporary/session-only content",
+                    "parameters": "none"
+                }
+            ],
+            "api_info": {
+                "base_url": "/api/v1",
+                "authentication": "Bearer token required in Authorization header",
+                "formats": {
+                    "retention_policy": ["permanent", "session_only", "30_days"],
+                    "http_methods": {
+                        "GET": ["/status", "/memory", "/stats", "/domains", "/blocked-domains", "/help"],
+                        "POST": ["/crawl", "/crawl/store", "/crawl/temp", "/crawl/deep/store", "/search", "/blocked-domains"],
+                        "DELETE": ["/memory", "/memory/temp", "/blocked-domains"]
+                    }
+                }
+            },
+            "timestamp": datetime.now().isoformat()
+        }
+        return help_data
+
     # API Status endpoint
     @app.get("/api/v1/status")
     async def api_status(session_info: Dict = Depends(verify_api_key)):
@@ -276,18 +364,103 @@ def create_app() -> FastAPI:
             log_error("api_get_stats", e)
             raise HTTPException(status_code=500, detail=str(e))
 
-    # Remove specific content
-    @app.delete("/api/v1/memory")
-    async def forget_url(request: ForgetUrlRequest, session_info: Dict = Depends(verify_api_key)):
+    # List unique domains
+    @app.get("/api/v1/domains")
+    async def list_domains(session_info: Dict = Depends(verify_api_key)):
         try:
-            removed = GLOBAL_DB.remove_content(url=request.url)
+            domains = GLOBAL_DB.list_domains()
             return {
                 "success": True,
-                "data": {"removed_count": removed, "url": request.url},
+                "data": domains,
                 "timestamp": datetime.now().isoformat()
             }
         except Exception as e:
-            log_error("api_forget_url", e, request.url)
+            log_error("api_list_domains", e)
+            raise HTTPException(status_code=500, detail=str(e))
+
+    # Blocked domains management
+    @app.get("/api/v1/blocked-domains")
+    async def list_blocked_domains(session_info: Dict = Depends(verify_api_key)):
+        try:
+            blocked = GLOBAL_DB.list_blocked_domains()
+            return {
+                "success": True,
+                "data": blocked,
+                "timestamp": datetime.now().isoformat()
+            }
+        except Exception as e:
+            log_error("api_list_blocked_domains", e)
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.post("/api/v1/blocked-domains")
+    async def add_blocked_domain(request: Request, session_info: Dict = Depends(verify_api_key)):
+        try:
+            body = await request.json()
+            pattern = body.get("pattern")
+            description = body.get("description", "")
+
+            if not pattern:
+                raise HTTPException(status_code=400, detail="Pattern is required")
+
+            result = GLOBAL_DB.add_blocked_domain(pattern, description)
+
+            if not result.get("success"):
+                raise HTTPException(status_code=400, detail=result.get("error", "Failed to add blocked domain"))
+
+            return {
+                "success": True,
+                "data": result,
+                "timestamp": datetime.now().isoformat()
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            log_error("api_add_blocked_domain", e)
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.delete("/api/v1/blocked-domains")
+    async def remove_blocked_domain(pattern: str, keyword: str = "", session_info: Dict = Depends(verify_api_key)):
+        try:
+            if not pattern:
+                raise HTTPException(status_code=400, detail="Pattern is required")
+
+            # Authorization check happens in storage.py
+            result = GLOBAL_DB.remove_blocked_domain(pattern, keyword)
+
+            if not result.get("success"):
+                if result.get("error") == "Unauthorized":
+                    raise HTTPException(status_code=401, detail="Unauthorized")
+                raise HTTPException(status_code=404, detail=result.get("error", "Pattern not found"))
+
+            return {
+                "success": True,
+                "data": result,
+                "timestamp": datetime.now().isoformat()
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            log_error("api_remove_blocked_domain", e)
+            raise HTTPException(status_code=500, detail=str(e))
+
+    # Remove specific content
+    @app.delete("/api/v1/memory")
+    async def forget_url(url: str, session_info: Dict = Depends(verify_api_key)):
+        try:
+            # Validate URL
+            if not validate_url(url):
+                raise HTTPException(status_code=400, detail="Invalid or unsafe URL provided")
+
+            removed = GLOBAL_DB.remove_content(url=url)
+            return {
+                "success": True,
+                "data": {"removed_count": removed, "url": url},
+                "timestamp": datetime.now().isoformat()
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            log_error("api_forget_url", e, url)
             raise HTTPException(status_code=500, detail=str(e))
 
     # Clear temporary memory
@@ -341,9 +514,11 @@ class APIClient:
         url = f"{self.base_url.rstrip('/')}{endpoint}"
 
         async with httpx.AsyncClient(timeout=self.timeout) as client:
-            if method.upper() == "GET":
-                response = await client.get(url, headers=headers, params=data)
+            if method.upper() in ["GET", "DELETE"]:
+                # GET and DELETE use query parameters
+                response = await client.request(method, url, headers=headers, params=data)
             else:
+                # POST, PUT, PATCH use JSON body
                 response = await client.request(method, url, headers=headers, json=data)
 
             response.raise_for_status()
@@ -398,11 +573,29 @@ class APIClient:
     async def get_database_stats(self) -> Dict[str, Any]:
         return await self.make_request("GET", "/api/v1/stats")
 
+    async def list_domains(self) -> Dict[str, Any]:
+        return await self.make_request("GET", "/api/v1/domains")
+
+    async def add_blocked_domain(self, pattern: str, description: str = "") -> Dict[str, Any]:
+        return await self.make_request("POST", "/api/v1/blocked-domains", {
+            "pattern": pattern,
+            "description": description
+        })
+
+    async def remove_blocked_domain(self, pattern: str, keyword: str = "") -> Dict[str, Any]:
+        return await self.make_request("DELETE", "/api/v1/blocked-domains", {"pattern": pattern, "keyword": keyword})
+
+    async def list_blocked_domains(self) -> Dict[str, Any]:
+        return await self.make_request("GET", "/api/v1/blocked-domains")
+
     async def forget_url(self, url: str) -> Dict[str, Any]:
         return await self.make_request("DELETE", "/api/v1/memory", {"url": url})
 
     async def clear_temp_memory(self) -> Dict[str, Any]:
         return await self.make_request("DELETE", "/api/v1/memory/temp")
+
+    async def get_help(self) -> Dict[str, Any]:
+        return await self.make_request("GET", "/api/v1/help")
 
 # Initialize global API client for client mode
 api_client = APIClient()

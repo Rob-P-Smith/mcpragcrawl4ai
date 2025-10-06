@@ -133,6 +133,13 @@ class RAGDatabase:
                         last_active DATETIME DEFAULT CURRENT_TIMESTAMP
                     );
 
+                    CREATE TABLE IF NOT EXISTS blocked_domains (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        pattern TEXT UNIQUE NOT NULL,
+                        description TEXT,
+                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    );
+
                     CREATE VIRTUAL TABLE IF NOT EXISTS content_vectors USING vec0(
                         embedding FLOAT[384],
                         content_id INTEGER
@@ -141,6 +148,23 @@ class RAGDatabase:
 
                 self.db.execute("INSERT OR REPLACE INTO sessions (session_id, last_active) VALUES (?, CURRENT_TIMESTAMP)",
                                (self.session_id,))
+
+                # Populate initial blocked domains if table is empty
+                blocked_count = self.db.execute("SELECT COUNT(*) FROM blocked_domains").fetchone()[0]
+                if blocked_count == 0:
+                    initial_blocks = [
+                        ("*.ru", "Block all Russian domains"),
+                        ("*.cn", "Block all Chinese domains"),
+                        ("*porn*", "Block URLs containing 'porn'"),
+                        ("*sex*", "Block URLs containing 'sex'"),
+                        ("*escort*", "Block URLs containing 'escort'"),
+                        ("*massage*", "Block URLs containing 'massage'")
+                    ]
+                    self.db.executemany(
+                        "INSERT OR IGNORE INTO blocked_domains (pattern, description) VALUES (?, ?)",
+                        initial_blocks
+                    )
+
                 self.db.commit()
         except Exception as e:
             log_error("init_database", e)
@@ -309,6 +333,210 @@ class RAGDatabase:
         """Get comprehensive database statistics"""
         from core.utilities.dbstats import get_db_stats_dict
         return get_db_stats_dict(self.db_path)
+
+    def list_domains(self) -> Dict[str, Any]:
+        """
+        List all unique domains from stored URLs with page counts
+
+        Returns:
+            Dictionary with domains array, total domains, and total pages
+        """
+        try:
+            from urllib.parse import urlparse
+
+            # Get all URLs from database
+            results = self.execute_with_retry('''
+                SELECT url FROM crawled_content
+            ''').fetchall()
+
+            # Extract and count domains
+            domain_counts = {}
+            for row in results:
+                url = row[0]
+                try:
+                    parsed = urlparse(url)
+                    domain = parsed.netloc or parsed.path
+                    # Remove 'www.' prefix if present
+                    if domain.startswith('www.'):
+                        domain = domain[4:]
+
+                    if domain:
+                        domain_counts[domain] = domain_counts.get(domain, 0) + 1
+                except Exception:
+                    # Skip invalid URLs
+                    continue
+
+            # Sort by page count (descending)
+            sorted_domains = [
+                {"domain": domain, "page_count": count}
+                for domain, count in sorted(domain_counts.items(), key=lambda x: x[1], reverse=True)
+            ]
+
+            return {
+                "success": True,
+                "domains": sorted_domains,
+                "total_domains": len(sorted_domains),
+                "total_pages": sum(d["page_count"] for d in sorted_domains)
+            }
+
+        except Exception as e:
+            log_error("list_domains", e)
+            return {
+                "success": False,
+                "error": str(e),
+                "domains": [],
+                "total_domains": 0,
+                "total_pages": 0
+            }
+
+    def is_domain_blocked(self, url: str) -> Dict[str, Any]:
+        """
+        Check if a URL matches any blocked domain patterns.
+        Supports wildcard patterns (*.ru) and keyword matching (*porn*)
+        """
+        try:
+            from urllib.parse import urlparse
+
+            # Parse the URL to get the domain
+            parsed = urlparse(url.lower())
+            domain = parsed.netloc or parsed.path
+            full_url = url.lower()
+
+            # Get all blocked patterns
+            patterns = self.execute_with_retry('SELECT pattern, description FROM blocked_domains').fetchall()
+
+            for pattern, description in patterns:
+                pattern_lower = pattern.lower()
+
+                # Handle wildcard at start: *.ru matches anything ending with .ru
+                if pattern_lower.startswith('*.'):
+                    suffix = pattern_lower[1:]  # Remove the *
+                    if domain.endswith(suffix):
+                        return {
+                            "blocked": True,
+                            "pattern": pattern,
+                            "reason": description or f"Matches pattern: {pattern}",
+                            "url": url
+                        }
+
+                # Handle wildcards on both sides: *porn* matches anywhere in URL
+                elif pattern_lower.startswith('*') and pattern_lower.endswith('*'):
+                    keyword = pattern_lower[1:-1]  # Remove both *
+                    if keyword in full_url or keyword in domain:
+                        return {
+                            "blocked": True,
+                            "pattern": pattern,
+                            "reason": description or f"Matches pattern: {pattern}",
+                            "url": url
+                        }
+
+                # Exact domain match
+                elif pattern_lower == domain:
+                    return {
+                        "blocked": True,
+                        "pattern": pattern,
+                        "reason": description or f"Matches pattern: {pattern}",
+                        "url": url
+                    }
+
+            return {"blocked": False, "url": url}
+
+        except Exception as e:
+            log_error("is_domain_blocked", e, url)
+            # In case of error, allow the URL (fail open)
+            return {"blocked": False, "url": url, "error": str(e)}
+
+    def add_blocked_domain(self, pattern: str, description: str = "") -> Dict[str, Any]:
+        """Add a domain pattern to the blocklist"""
+        try:
+            with self.transaction():
+                self.execute_with_retry(
+                    'INSERT INTO blocked_domains (pattern, description) VALUES (?, ?)',
+                    (pattern, description)
+                )
+
+            return {
+                "success": True,
+                "pattern": pattern,
+                "description": description
+            }
+        except sqlite3.IntegrityError:
+            return {
+                "success": False,
+                "error": f"Pattern '{pattern}' already exists in blocklist"
+            }
+        except Exception as e:
+            log_error("add_blocked_domain", e)
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
+    def remove_blocked_domain(self, pattern: str, keyword: str = "") -> Dict[str, Any]:
+        """Remove a domain pattern from the blocklist (requires authorization keyword)"""
+        try:
+            # Authorization check using environment variable
+            import os
+            REQUIRED_KEYWORD = os.getenv("BLOCKED_DOMAIN_KEYWORD", "")
+            if not REQUIRED_KEYWORD or keyword != REQUIRED_KEYWORD:
+                return {
+                    "success": False,
+                    "error": "Unauthorized"
+                }
+
+            with self.transaction():
+                cursor = self.execute_with_retry(
+                    'DELETE FROM blocked_domains WHERE pattern = ?',
+                    (pattern,)
+                )
+
+                if cursor.rowcount == 0:
+                    return {
+                        "success": False,
+                        "error": f"Pattern '{pattern}' not found in blocklist"
+                    }
+
+                return {
+                    "success": True,
+                    "pattern": pattern,
+                    "removed": True
+                }
+        except Exception as e:
+            log_error("remove_blocked_domain", e)
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
+    def list_blocked_domains(self) -> Dict[str, Any]:
+        """List all blocked domain patterns"""
+        try:
+            results = self.execute_with_retry(
+                'SELECT pattern, description, created_at FROM blocked_domains ORDER BY created_at DESC'
+            ).fetchall()
+
+            blocked_list = [
+                {
+                    "pattern": pattern,
+                    "description": description,
+                    "created_at": created_at
+                }
+                for pattern, description, created_at in results
+            ]
+
+            return {
+                "success": True,
+                "blocked_domains": blocked_list,
+                "count": len(blocked_list)
+            }
+        except Exception as e:
+            log_error("list_blocked_domains", e)
+            return {
+                "success": False,
+                "error": str(e),
+                "blocked_domains": [],
+                "count": 0
+            }
 
     def remove_content(self, url: str = None, session_only: bool = False) -> int:
         try:
