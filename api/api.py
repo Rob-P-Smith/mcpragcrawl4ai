@@ -128,6 +128,14 @@ def create_app() -> FastAPI:
             allow_headers=["*"],
         )
 
+    # Startup event - initialize RAM DB
+    @app.on_event("startup")
+    async def startup_event():
+        """Initialize RAM database on startup if enabled"""
+        print("🚀 Starting Crawl4AI RAG Server...")
+        await GLOBAL_DB.initialize_async()
+        print("✅ Server ready")
+
     # Global exception handler
     @app.exception_handler(Exception)
     async def global_exception_handler(request: Request, exc: Exception):
@@ -460,6 +468,42 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail=str(e))
         except Exception as e:
             log_error("api_list_memory", e)
+            raise HTTPException(status_code=500, detail=str(e))
+
+    # Get RAM DB sync statistics
+    @app.get("/api/v1/db/stats")
+    async def get_db_stats(session_info: Dict = Depends(verify_api_key)):
+        """Get RAM DB sync statistics and health metrics"""
+        try:
+            if GLOBAL_DB.sync_manager:
+                metrics = GLOBAL_DB.sync_manager.get_metrics()
+
+                # Get database sizes
+                import os
+                disk_size = os.path.getsize(GLOBAL_DB.db_path) if os.path.exists(GLOBAL_DB.db_path) else 0
+
+                return {
+                    "success": True,
+                    "mode": "memory",
+                    "disk_db_path": GLOBAL_DB.db_path,
+                    "disk_db_size_mb": disk_size / (1024 * 1024),
+                    "sync_metrics": metrics,
+                    "health": {
+                        "pending_changes": metrics['pending_changes'],
+                        "last_sync_ago_seconds": time.time() - metrics['last_sync_time'] if metrics['last_sync_time'] else None,
+                        "sync_success_rate": (metrics['total_syncs'] - metrics['failed_syncs']) / max(metrics['total_syncs'], 1)
+                    },
+                    "timestamp": datetime.now().isoformat()
+                }
+            else:
+                return {
+                    "success": True,
+                    "mode": "disk",
+                    "db_path": GLOBAL_DB.db_path,
+                    "timestamp": datetime.now().isoformat()
+                }
+        except Exception as e:
+            log_error("api_get_db_stats", e)
             raise HTTPException(status_code=500, detail=str(e))
 
     # Get database statistics

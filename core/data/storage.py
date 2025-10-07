@@ -14,11 +14,14 @@ import traceback
 import logging
 import threading
 import numpy as np
+import asyncio
 from contextlib import contextmanager
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 
 from sentence_transformers import SentenceTransformer
+from core.data.sync_manager import DBSyncManager
+
 GLOBAL_MODEL = SentenceTransformer('all-MiniLM-L6-v2')
 
 class RAGDatabase:
@@ -34,7 +37,32 @@ class RAGDatabase:
         self.embedder = GLOBAL_MODEL
         self.db_lock = threading.RLock()
         self._connection_closed = False
-        self.init_database()
+
+        # RAM Database support
+        self.is_memory_mode = os.getenv("USE_MEMORY_DB", "true").lower() == "true"
+        self.sync_manager = None
+
+        if self.is_memory_mode:
+            print("🚀 RAM Database mode enabled")
+            self.sync_manager = DBSyncManager(db_path)
+            # Connection will be set by initialize_async()
+            # Don't call init_database() yet
+        else:
+            print("💾 Disk Database mode (traditional)")
+            self.init_database()
+
+    async def initialize_async(self):
+        """
+        Initialize memory database (called from start_api_server.py on startup)
+        Only needed when USE_MEMORY_DB=true
+        """
+        if self.sync_manager and self.db is None:
+            self.db = await self.sync_manager.initialize()
+            self.init_database()  # Create tables if needed in memory
+            print("✅ RAM Database initialized and ready")
+        elif not self.is_memory_mode and self.db is None:
+            # Fallback for disk mode
+            self.init_database()
 
     def __del__(self):
         self.close()
@@ -210,6 +238,16 @@ class RAGDatabase:
                 embedding_text = markdown if markdown else content
                 self.generate_embeddings(content_id, embedding_text)
 
+                # Track write for sync (non-blocking)
+                # Note: content_vectors tracked separately in generate_embeddings()
+                if self.sync_manager:
+                    try:
+                        loop = asyncio.get_event_loop()
+                        loop.create_task(self.sync_manager.track_write('crawled_content'))
+                    except RuntimeError:
+                        # Event loop not running, skip tracking
+                        pass
+
                 return {
                     "success": True,
                     "content_id": content_id,
@@ -232,12 +270,20 @@ class RAGDatabase:
                 (embedding.astype(np.float32).tobytes(), content_id)
                 for embedding in embeddings
             ]
-            
+
             with self.db_lock:
                 self.db.executemany('''
                     INSERT INTO content_vectors (embedding, content_id)
                     VALUES (?, ?)
                 ''', embedding_data)
+
+            # Track vector changes for RAM DB sync (can't use triggers on virtual tables)
+            if self.sync_manager:
+                try:
+                    loop = asyncio.get_event_loop()
+                    loop.create_task(self.sync_manager.track_vector_change(content_id, 'INSERT'))
+                except RuntimeError:
+                    pass
         except Exception as e:
             log_error("generate_embeddings", e)
             raise
@@ -449,8 +495,128 @@ class RAGDatabase:
 
     def get_database_stats(self) -> Dict[str, Any]:
         """Get comprehensive database statistics"""
-        from core.utilities.dbstats import get_db_stats_dict
-        return get_db_stats_dict(self.db_path)
+        if self.is_memory_mode and self.db is not None:
+            # Query RAM database directly
+            return self._get_stats_from_ram_db()
+        else:
+            # Query disk database via dbstats module
+            from core.utilities.dbstats import get_db_stats_dict
+            stats = get_db_stats_dict(self.db_path)
+            stats['using_ram_db'] = False
+            return stats
+
+    def _get_stats_from_ram_db(self) -> Dict[str, Any]:
+        """Get stats by querying the in-memory database directly"""
+        try:
+            # Basic counts
+            pages = self.db.execute('SELECT COUNT(*) FROM crawled_content').fetchone()[0]
+
+            # Try to get embeddings count (requires sqlite-vec)
+            vec_available = False
+            try:
+                import sqlite_vec
+                # Check if extension is already loaded by trying a query
+                try:
+                    embeddings = self.db.execute('SELECT COUNT(*) FROM content_vectors').fetchone()[0]
+                    vec_available = True
+                except:
+                    embeddings = None
+            except:
+                embeddings = None
+
+            sessions = self.db.execute('SELECT COUNT(*) FROM sessions').fetchone()[0]
+
+            # Database size (for RAM DB, report the disk size since memory size isn't meaningful)
+            if os.path.exists(self.db_path):
+                size_bytes = os.path.getsize(self.db_path)
+                size_mb = size_bytes / 1024 / 1024
+            else:
+                size_bytes = 0
+                size_mb = 0
+
+            # Retention policy breakdown
+            retention_stats = self.db.execute('''
+                SELECT retention_policy, COUNT(*) as count
+                FROM crawled_content
+                GROUP BY retention_policy
+                ORDER BY count DESC
+            ''').fetchall()
+
+            retention_breakdown = {policy: count for policy, count in retention_stats}
+
+            # Recent activity (last 10 pages)
+            recent = self.db.execute('''
+                SELECT url, title, timestamp,
+                       LENGTH(content) as content_size,
+                       retention_policy
+                FROM crawled_content
+                ORDER BY timestamp DESC
+                LIMIT 10
+            ''').fetchall()
+
+            recent_activity = []
+            for url, title, timestamp, size, policy in recent:
+                recent_activity.append({
+                    "url": url,
+                    "title": title or "No title",
+                    "timestamp": timestamp,
+                    "size_kb": round(size / 1024, 1) if size else 0,
+                    "retention_policy": policy
+                })
+
+            # Storage breakdown
+            content_size = self.db.execute('''
+                SELECT SUM(LENGTH(content) + LENGTH(COALESCE(markdown, '')) + LENGTH(COALESCE(title, '')))
+                FROM crawled_content
+            ''').fetchone()[0] or 0
+
+            if isinstance(embeddings, int):
+                embedding_size = embeddings * 384 * 4  # 384-dim float32
+            else:
+                embedding_size = 0
+
+            content_mb = content_size / 1024 / 1024
+            embedding_mb = embedding_size / 1024 / 1024
+            metadata_mb = max(0, size_mb - content_mb - embedding_mb)
+
+            # Top tags
+            tags_result = self.db.execute('''
+                SELECT tags, COUNT(*) as count
+                FROM crawled_content
+                WHERE tags IS NOT NULL AND tags != ''
+                GROUP BY tags
+                ORDER BY count DESC
+                LIMIT 5
+            ''').fetchall()
+
+            top_tags = [{"tag": tag, "count": count} for tag, count in tags_result]
+
+            return {
+                "success": True,
+                "using_ram_db": True,
+                "database_path": os.path.abspath(self.db_path),
+                "total_pages": pages,
+                "vector_embeddings": embeddings,
+                "sessions": sessions,
+                "database_size_mb": round(size_mb, 2),
+                "database_size_bytes": size_bytes,
+                "retention_breakdown": retention_breakdown,
+                "recent_activity": recent_activity,
+                "storage_breakdown": {
+                    "content_mb": round(content_mb, 2),
+                    "embeddings_mb": round(embedding_mb, 2),
+                    "metadata_mb": round(metadata_mb, 2)
+                },
+                "top_tags": top_tags,
+                "vec_extension_available": vec_available
+            }
+
+        except Exception as e:
+            return {
+                "success": False,
+                "using_ram_db": True,
+                "error": f"Error reading RAM database: {str(e)}"
+            }
 
     def list_domains(self) -> Dict[str, Any]:
         """
