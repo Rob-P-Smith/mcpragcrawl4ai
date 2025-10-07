@@ -1,16 +1,26 @@
-"""
-Core RAG processor for Crawl4AI system
-Manages the MCP server interface, tool definitions, and request handling
-"""
-
+import os
+import sys
 import asyncio
 import json
 from typing import Dict, Any
+from dotenv import load_dotenv
+
+load_dotenv()
 
 from operations.crawler import Crawl4AIRAG
-from data.storage import GLOBAL_DB, log_error
+from core.data.storage import GLOBAL_DB, log_error
 
-GLOBAL_RAG = Crawl4AIRAG()
+IS_CLIENT_MODE = os.getenv("IS_SERVER", "true").lower() == "false"
+
+if IS_CLIENT_MODE:
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from api.api import api_client
+    GLOBAL_RAG = None
+    print("🔗 Running in CLIENT mode - API calls will be forwarded to remote server", file=sys.stderr, flush=True)
+else:
+    crawl4ai_url = os.getenv("CRAWL4AI_URL", "http://localhost:11235")
+    GLOBAL_RAG = Crawl4AIRAG(crawl4ai_url=crawl4ai_url)
+    print(f"🏠 Running in SERVER mode - using local RAG system (Crawl4AI: {crawl4ai_url})", file=sys.stderr, flush=True)
 
 class MCPServer:
     def __init__(self):
@@ -65,12 +75,61 @@ class MCPServer:
             },
             {
                 "name": "list_memory",
-                "description": "List all stored content in the knowledge base",
+                "description": "List all stored content in the knowledge base (limited to 100 results by default)",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "filter": {"type": "string", "description": "Filter by retention policy (permanent, session_only, 30_days)"}
+                        "filter": {"type": "string", "description": "Filter by retention policy (permanent, session_only, 30_days)"},
+                        "limit": {"type": "integer", "description": "Maximum number of results to return (default 100, max 1000)"}
                     }
+                }
+            },
+            {
+                "name": "db_stats",
+                "description": "Get comprehensive database statistics including record counts, storage size, and recent activity",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {}
+                }
+            },
+            {
+                "name": "list_domains",
+                "description": "List all unique website domains (e.g., github.com, cnn.com) that have been stored in the knowledge base with page counts",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {}
+                }
+            },
+            {
+                "name": "add_blocked_domain",
+                "description": "Add a domain pattern to the blocklist. Supports wildcards (*.ru blocks all .ru domains) and keywords (*porn* blocks URLs containing 'porn')",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "pattern": {"type": "string", "description": "Domain pattern to block (e.g., *.ru, *.cn, *porn*, example.com)"},
+                        "description": {"type": "string", "description": "Optional description of why this pattern is blocked"}
+                    },
+                    "required": ["pattern"]
+                }
+            },
+            {
+                "name": "remove_blocked_domain",
+                "description": "Remove a domain pattern from the blocklist",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "pattern": {"type": "string", "description": "Domain pattern to unblock"},
+                        "keyword": {"type": "string", "description": "Authorization keyword"}
+                    },
+                    "required": ["pattern", "keyword"]
+                }
+            },
+            {
+                "name": "list_blocked_domains",
+                "description": "List all currently blocked domain patterns",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {}
                 }
             },
             {
@@ -90,22 +149,6 @@ class MCPServer:
                 "inputSchema": {"type": "object", "properties": {}}
             },
             {
-                "name": "deep_crawl_dfs",
-                "description": "Deep crawl multiple pages using depth-first search strategy without storing",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "url": {"type": "string", "description": "Starting URL for deep crawl"},
-                        "max_depth": {"type": "integer", "description": "Maximum depth to crawl (1-5, default 2)"},
-                        "max_pages": {"type": "integer", "description": "Maximum pages to crawl (1-250, default 10)"},
-                        "include_external": {"type": "boolean", "description": "Whether to follow external domain links (default false)"},
-                        "score_threshold": {"type": "number", "description": "Minimum URL score to crawl (0.0-1.0, default 0.0)"},
-                        "timeout": {"type": "integer", "description": "Timeout in seconds (60-1800, auto-calculated if not provided)"}
-                    },
-                    "required": ["url"]
-                }
-            },
-            {
                 "name": "deep_crawl_and_store",
                 "description": "Deep crawl multiple pages using DFS strategy and store all in knowledge base",
                 "inputSchema": {
@@ -121,6 +164,25 @@ class MCPServer:
                         "timeout": {"type": "integer", "description": "Timeout in seconds (60-1800, auto-calculated if not provided)"}
                     },
                     "required": ["url"]
+                }
+            },
+            {
+                "name": "test_tool",
+                "description": "Test tool for debugging",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "test": {"type": "string", "description": "Test parameter"}
+                    },
+                    "required": ["test"]
+                }
+            },
+            {
+                "name": "get_help",
+                "description": "Get comprehensive help documentation for all available tools with examples and parameter types",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {}
                 }
             }
         ]
@@ -162,7 +224,11 @@ class MCPServer:
                     if not validate_url(url):
                         result = {"success": False, "error": "Invalid or unsafe URL provided"}
                     else:
-                        result = await self.rag.crawl_url(url)
+                        if IS_CLIENT_MODE:
+                            api_result = await api_client.crawl_url(url)
+                            result = api_result.get("data", api_result)
+                        else:
+                            result = await self.rag.crawl_url(url)
                 
                 elif tool_name == "crawl_and_remember":
                     url = arguments["url"]
@@ -170,11 +236,15 @@ class MCPServer:
                         result = {"success": False, "error": "Invalid or unsafe URL provided"}
                     else:
                         tags = validate_string_length(arguments.get("tags", ""), 255, "tags")
-                        result = await self.rag.crawl_and_store(
-                            url,
-                            retention_policy='permanent',
-                            tags=tags
-                        )
+                        if IS_CLIENT_MODE:
+                            api_result = await api_client.crawl_and_store(url, tags, 'permanent')
+                            result = api_result.get("data", api_result)
+                        else:
+                            result = await self.rag.crawl_and_store(
+                                url,
+                                retention_policy='permanent',
+                                tags=tags
+                            )
                 
                 elif tool_name == "crawl_temp":
                     url = arguments["url"]
@@ -182,65 +252,132 @@ class MCPServer:
                         result = {"success": False, "error": "Invalid or unsafe URL provided"}
                     else:
                         tags = validate_string_length(arguments.get("tags", ""), 255, "tags")
-                        result = await self.rag.crawl_and_store(
-                            url,
-                            retention_policy='session_only',
-                            tags=tags
-                        )
+                        if IS_CLIENT_MODE:
+                            api_result = await api_client.crawl_temp(url, tags)
+                            result = api_result.get("data", api_result)
+                        else:
+                            result = await self.rag.crawl_and_store(
+                                url,
+                                retention_policy='session_only',
+                                tags=tags
+                            )
                 
                 elif tool_name == "search_memory":
                     query = validate_string_length(arguments["query"], 500, "query")
                     limit = validate_integer_range(arguments.get("limit", 5), 1, 1000, "limit")
-                    result = await self.rag.search_knowledge(query, limit)
-                
+                    tags_str = arguments.get("tags")
+                    tags_list = None
+                    if tags_str:
+                        tags_str = validate_string_length(tags_str, 500, "tags")
+                        tags_list = [tag.strip() for tag in tags_str.split(',') if tag.strip()]
+
+                    if IS_CLIENT_MODE:
+                        api_result = await api_client.search_knowledge(query, limit, tags=tags_str if tags_str else None)
+                        result = api_result.get("data", api_result)
+                    else:
+                        result = await self.rag.search_knowledge(query, limit, tags=tags_list)
+
+                elif tool_name == "target_search":
+                    query = validate_string_length(arguments["query"], 500, "query")
+                    initial_limit = validate_integer_range(arguments.get("initial_limit", 5), 1, 100, "initial_limit")
+                    expanded_limit = validate_integer_range(arguments.get("expanded_limit", 20), 1, 1000, "expanded_limit")
+
+                    if IS_CLIENT_MODE:
+                        api_result = await api_client.target_search(query, initial_limit, expanded_limit)
+                        result = api_result.get("data", api_result)
+                    else:
+                        result = await self.rag.target_search(query, initial_limit, expanded_limit)
+
                 elif tool_name == "list_memory":
                     filter_param = arguments.get("filter")
                     if filter_param:
                         filter_param = validate_string_length(filter_param, 500, "filter")
-                    result = {
-                        "success": True,
-                        "content": GLOBAL_DB.list_content(filter_param)
-                    }
-                
+                    limit = validate_integer_range(arguments.get("limit", 100), 1, 1000, "limit")
+                    if IS_CLIENT_MODE:
+                        api_result = await api_client.list_memory(filter_param, limit)
+                        result = api_result.get("data", api_result)
+                    else:
+                        list_result = GLOBAL_DB.list_content(filter_param, limit)
+                        result = {
+                            "success": True,
+                            **list_result
+                        }
+
+                elif tool_name == "db_stats":
+                    if IS_CLIENT_MODE:
+                        api_result = await api_client.get_database_stats()
+                        result = api_result.get("data", api_result)
+                    else:
+                        result = await self.rag.get_database_stats()
+
+                elif tool_name == "list_domains":
+                    if IS_CLIENT_MODE:
+                        api_result = await api_client.list_domains()
+                        result = api_result.get("data", api_result)
+                    else:
+                        result = await self.rag.list_domains()
+
+                elif tool_name == "add_blocked_domain":
+                    pattern = arguments["pattern"]
+                    description = arguments.get("description", "")
+                    if IS_CLIENT_MODE:
+                        api_result = await api_client.add_blocked_domain(pattern, description)
+                        result = api_result.get("data", api_result)
+                    else:
+                        result = await self.rag.add_blocked_domain(pattern, description)
+
+                elif tool_name == "remove_blocked_domain":
+                    pattern = arguments["pattern"]
+                    keyword = arguments.get("keyword", "")
+                    if IS_CLIENT_MODE:
+                        api_result = await api_client.remove_blocked_domain(pattern, keyword)
+                        result = api_result.get("data", api_result)
+                    else:
+                        result = await self.rag.remove_blocked_domain(pattern, keyword)
+
+                elif tool_name == "list_blocked_domains":
+                    if IS_CLIENT_MODE:
+                        api_result = await api_client.list_blocked_domains()
+                        result = api_result.get("data", api_result)
+                    else:
+                        result = await self.rag.list_blocked_domains()
+
                 elif tool_name == "forget_url":
                     url = arguments["url"]
-                    if not validate_url(url):
-                        result = {"success": False, "error": "Invalid or unsafe URL provided"}
+
+                    # Basic validation to prevent SQL injection
+                    dangerous_patterns = [
+                        'SELECT', 'INSERT', 'UPDATE', 'DELETE', 'DROP', 'CREATE',
+                        'ALTER', 'TRUNCATE', 'EXEC', 'EXECUTE', '--', ';--',
+                        'UNION', 'SCRIPT', '<script'
+                    ]
+                    url_upper = url.upper()
+                    if any(pattern in url_upper for pattern in dangerous_patterns):
+                        result = {"success": False, "error": "Invalid URL: contains dangerous patterns"}
                     else:
-                        removed = GLOBAL_DB.remove_content(url=url)
+                        if IS_CLIENT_MODE:
+                            api_result = await api_client.forget_url(url)
+                            result = api_result.get("data", api_result)
+                        else:
+                            removed = GLOBAL_DB.remove_content(url=url)
+                            result = {
+                                "success": True,
+                                "removed_count": removed,
+                                "url": url
+                            }
+                
+                elif tool_name == "clear_temp_memory":
+                    if IS_CLIENT_MODE:
+                        api_result = await api_client.clear_temp_memory()
+                        result = api_result.get("data", api_result)
+                    else:
+                        removed = GLOBAL_DB.remove_content(session_only=True)
                         result = {
                             "success": True,
                             "removed_count": removed,
-                            "url": url
+                            "session_id": GLOBAL_DB.session_id
                         }
-                
-                elif tool_name == "clear_temp_memory":
-                    removed = GLOBAL_DB.remove_content(session_only=True)
-                    result = {
-                        "success": True,
-                        "removed_count": removed,
-                        "session_id": GLOBAL_DB.session_id
-                    }
-                
-                elif tool_name == "deep_crawl_dfs":
-                    url = arguments["url"]
-                    if not validate_url(url):
-                        result = {"success": False, "error": "Invalid or unsafe URL provided"}
-                    else:
-                        max_depth, max_pages = validate_deep_crawl_params(
-                            arguments.get("max_depth", 2),
-                            arguments.get("max_pages", 10)
-                        )
-                        include_external = arguments.get("include_external", False)
-                        score_threshold = validate_float_range(
-                            arguments.get("score_threshold", 0.0), 0.0, 1.0, "score_threshold"
-                        )
-                        timeout = arguments.get("timeout")
-                        
-                        result = await self.rag.deep_crawl_dfs(
-                            url, max_depth, max_pages, include_external, score_threshold, timeout
-                        )
-                
+
                 elif tool_name == "deep_crawl_and_store":
                     url = arguments["url"]
                     if not validate_url(url):
@@ -257,12 +394,100 @@ class MCPServer:
                             arguments.get("score_threshold", 0.0), 0.0, 1.0, "score_threshold"
                         )
                         timeout = arguments.get("timeout")
-                        
-                        result = await self.rag.deep_crawl_and_store(
-                            url, retention_policy, tags, max_depth, max_pages, 
-                            include_external, score_threshold, timeout
-                        )
-                
+
+                        if IS_CLIENT_MODE:
+                            api_result = await api_client.deep_crawl_and_store(
+                                url, retention_policy, tags, max_depth, max_pages,
+                                include_external, score_threshold, timeout
+                            )
+                            result = api_result.get("data", api_result)
+                        else:
+                            result = await self.rag.deep_crawl_and_store(
+                                url, retention_policy, tags, max_depth, max_pages,
+                                include_external, score_threshold, timeout
+                            )
+
+                elif tool_name == "get_help":
+                    if IS_CLIENT_MODE:
+                        result = await api_client.get_help()
+                    else:
+                        result = {
+                            "success": True,
+                            "tools": [
+                                {
+                                    "name": "crawl_url",
+                                    "example": "Crawl http://www.example.com without storing",
+                                    "parameters": "url: string"
+                                },
+                                {
+                                    "name": "crawl_and_remember",
+                                    "example": "Crawl and permanently store https://github.com/anthropics/anthropic-sdk-python",
+                                    "parameters": "url: string, tags?: string"
+                                },
+                                {
+                                    "name": "crawl_temp",
+                                    "example": "Crawl and temporarily store https://news.ycombinator.com",
+                                    "parameters": "url: string, tags?: string"
+                                },
+                                {
+                                    "name": "deep_crawl_and_store",
+                                    "example": "Deep crawl https://docs.python.org starting from main page",
+                                    "parameters": "url: string, max_depth?: number (1-5, default 2), max_pages?: number (1-250, default 10), retention_policy?: string (permanent|session_only|30_days, default permanent), tags?: string, include_external?: boolean, score_threshold?: number (0.0-1.0), timeout?: number (60-1800 seconds)"
+                                },
+                                {
+                                    "name": "search_memory",
+                                    "example": "Search for 'async python patterns' in stored knowledge",
+                                    "parameters": "query: string, limit?: number (default 5, max 1000)"
+                                },
+                                {
+                                    "name": "list_memory",
+                                    "example": "List all stored pages or filter by retention policy",
+                                    "parameters": "filter?: string (permanent|session_only|30_days), limit?: number (default 100, max 1000)"
+                                },
+                                {
+                                    "name": "db_stats",
+                                    "example": "Get database statistics including record counts, storage size, and recent activity",
+                                    "parameters": "none"
+                                },
+                                {
+                                    "name": "list_domains",
+                                    "example": "List all unique domains stored (e.g., github.com, docs.python.org) with page counts",
+                                    "parameters": "none"
+                                },
+                                {
+                                    "name": "add_blocked_domain",
+                                    "example": "Block all .ru domains or URLs containing 'spam': pattern='*.ru' or pattern='*spam*'",
+                                    "parameters": "pattern: string (e.g., *.ru, *.cn, *spam*, example.com), description?: string"
+                                },
+                                {
+                                    "name": "remove_blocked_domain",
+                                    "example": "Unblock a previously blocked domain pattern",
+                                    "parameters": "pattern: string, keyword: string (authorization required)"
+                                },
+                                {
+                                    "name": "list_blocked_domains",
+                                    "example": "Show all currently blocked domain patterns",
+                                    "parameters": "none"
+                                },
+                                {
+                                    "name": "forget_url",
+                                    "example": "Remove specific URL from knowledge base: url='https://example.com/page'",
+                                    "parameters": "url: string"
+                                },
+                                {
+                                    "name": "clear_temp_memory",
+                                    "example": "Clear all temporary/session-only content from current session",
+                                    "parameters": "none"
+                                }
+                            ],
+                            "usage_notes": {
+                                "retention_policies": ["permanent", "session_only", "30_days"],
+                                "url_validation": "All URLs are validated for safety and proper format",
+                                "blocking_patterns": "Use * as wildcard (*.ru blocks all .ru domains, *spam* blocks URLs with 'spam')",
+                                "limits": "Search/list limits are capped at 1000 results maximum"
+                            }
+                        }
+
                 else:
                     result = {"success": False, "error": f"Unknown tool: {tool_name}"}
 

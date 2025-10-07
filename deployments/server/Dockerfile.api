@@ -1,0 +1,54 @@
+FROM python:3.11-slim
+
+# Set working directory
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    gcc \
+    g++ \
+    git \
+    socat \
+    supervisor \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements first for better Docker layer caching
+COPY deployments/server/requirements.txt .
+
+# Install Python dependencies
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
+
+# Install PyTorch CPU version for sentence-transformers
+RUN pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+
+# Copy the application code
+COPY api/ ./api/
+COPY core/operations/ ./operations/
+COPY core/data/ ./core/data/
+COPY core/utilities/ ./core/utilities/
+COPY core/rag_processor.py ./core/rag_processor.py
+COPY deployments/server/start_api_server.py ./start_api_server.py
+
+# Copy supervisord configuration
+COPY deployments/server/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+
+# Create non-root user for security first
+RUN useradd -m -u 1000 apiuser
+
+# Create directories and set ownership
+RUN mkdir -p /app/data /app/data/models /var/log/supervisor && \
+    chown -R apiuser:apiuser /app && \
+    chown -R apiuser:apiuser /var/log/supervisor && \
+    chown -R apiuser:apiuser /home/apiuser
+
+# Expose both API and MCP ports
+EXPOSE 8080 3000
+
+# Health check (check API server)
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:8080/health || exit 1
+
+# Start supervisord (manages both API and MCP servers)
+CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]
