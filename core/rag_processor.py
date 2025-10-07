@@ -265,12 +265,29 @@ class MCPServer:
                 elif tool_name == "search_memory":
                     query = validate_string_length(arguments["query"], 500, "query")
                     limit = validate_integer_range(arguments.get("limit", 5), 1, 1000, "limit")
+                    tags_str = arguments.get("tags")
+                    tags_list = None
+                    if tags_str:
+                        tags_str = validate_string_length(tags_str, 500, "tags")
+                        tags_list = [tag.strip() for tag in tags_str.split(',') if tag.strip()]
+
                     if IS_CLIENT_MODE:
-                        api_result = await api_client.search_knowledge(query, limit)
+                        api_result = await api_client.search_knowledge(query, limit, tags=tags_str if tags_str else None)
                         result = api_result.get("data", api_result)
                     else:
-                        result = await self.rag.search_knowledge(query, limit)
-                
+                        result = await self.rag.search_knowledge(query, limit, tags=tags_list)
+
+                elif tool_name == "target_search":
+                    query = validate_string_length(arguments["query"], 500, "query")
+                    initial_limit = validate_integer_range(arguments.get("initial_limit", 5), 1, 100, "initial_limit")
+                    expanded_limit = validate_integer_range(arguments.get("expanded_limit", 20), 1, 1000, "expanded_limit")
+
+                    if IS_CLIENT_MODE:
+                        api_result = await api_client.target_search(query, initial_limit, expanded_limit)
+                        result = api_result.get("data", api_result)
+                    else:
+                        result = await self.rag.target_search(query, initial_limit, expanded_limit)
+
                 elif tool_name == "list_memory":
                     filter_param = arguments.get("filter")
                     if filter_param:
@@ -327,8 +344,16 @@ class MCPServer:
 
                 elif tool_name == "forget_url":
                     url = arguments["url"]
-                    if not validate_url(url):
-                        result = {"success": False, "error": "Invalid or unsafe URL provided"}
+
+                    # Basic validation to prevent SQL injection
+                    dangerous_patterns = [
+                        'SELECT', 'INSERT', 'UPDATE', 'DELETE', 'DROP', 'CREATE',
+                        'ALTER', 'TRUNCATE', 'EXEC', 'EXECUTE', '--', ';--',
+                        'UNION', 'SCRIPT', '<script'
+                    ]
+                    url_upper = url.upper()
+                    if any(pattern in url_upper for pattern in dangerous_patterns):
+                        result = {"success": False, "error": "Invalid URL: contains dangerous patterns"}
                     else:
                         if IS_CLIENT_MODE:
                             api_result = await api_client.forget_url(url)

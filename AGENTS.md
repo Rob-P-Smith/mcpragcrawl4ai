@@ -42,11 +42,20 @@ This is a Crawl4AI RAG (Retrieval-Augmented Generation) MCP Server implementatio
 2. **crawl_and_remember**: Crawl and store permanently
 3. **crawl_temp**: Crawl and store temporarily (session-only)
 4. **search_memory**: Semantic search of stored content
-5. **list_memory**: List all stored content with optional filtering
-6. **forget_url**: Remove specific content by URL
-7. **clear_temp_memory**: Clear temporary session content
-8. **deep_crawl_dfs**: Deep crawl multiple pages using depth-first search without storing
-9. **deep_crawl_and_store**: Deep crawl multiple pages using DFS and store all in knowledge base
+   - Now supports tag filtering via `tags` parameter (comma-separated, ANY match)
+   - Results are automatically deduplicated by URL (keeps best match per URL)
+   - Example: `search_memory(query="react hooks", tags="react, frontend", limit=10)`
+5. **target_search**: Intelligent search with automatic tag expansion
+   - Performs initial semantic search to discover tags
+   - Re-searches using discovered tags to expand results
+   - Deduplicates and ranks results by relevance
+   - Returns discovered tags and expansion metadata
+   - Example: `target_search(query="react hooks", initial_limit=5, expanded_limit=20)`
+6. **list_memory**: List all stored content with optional filtering
+7. **forget_url**: Remove specific content by URL
+8. **clear_temp_memory**: Clear temporary session content
+9. **deep_crawl_dfs**: Deep crawl multiple pages using depth-first search without storing
+10. **deep_crawl_and_store**: Deep crawl multiple pages using DFS and store all in knowledge base
 
 ## Development Commands
 

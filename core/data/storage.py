@@ -206,7 +206,9 @@ class RAGDatabase:
                 ''', (url, title, content, markdown, content_hash, self.session_id, retention_policy, tags, metadata_json))
 
                 content_id = cursor.lastrowid
-                self.generate_embeddings(content_id, content)
+                # Use markdown for embeddings with fallback to content
+                embedding_text = markdown if markdown else content
+                self.generate_embeddings(content_id, embedding_text)
 
                 return {
                     "success": True,
@@ -240,35 +242,151 @@ class RAGDatabase:
             log_error("generate_embeddings", e)
             raise
 
-    def search_similar(self, query: str, limit: int = 5) -> List[Dict]:
+    def search_similar(self, query: str, limit: int = 5, tags: Optional[List[str]] = None) -> List[Dict]:
+        """
+        Search for similar content using vector similarity
+
+        Args:
+            query: Search query string
+            limit: Maximum number of results
+            tags: Optional list of tags to filter by (ANY match)
+
+        Returns:
+            List of matching documents with similarity scores
+        """
         try:
             query_embedding = self.embedder.encode([query])[0]
             query_bytes = query_embedding.astype(np.float32).tobytes()
 
-            results = self.execute_with_retry('''
-                SELECT
-                    cc.url, cc.title, cc.content, cc.timestamp, cc.tags,
-                    distance
-                FROM content_vectors
-                JOIN crawled_content cc ON content_vectors.content_id = cc.id
-                WHERE embedding MATCH ? AND k = ?
-                ORDER BY distance
-            ''', (query_bytes, limit)).fetchall()
+            # Build tag filter condition if tags provided
+            if tags and len(tags) > 0:
+                # Create OR conditions for tag matching
+                tag_conditions = ' OR '.join(['cc.tags LIKE ?' for _ in tags])
+                tag_params = [f'%{tag}%' for tag in tags]
 
+                sql = f'''
+                    SELECT
+                        cc.url, cc.title, cc.markdown, cc.content, cc.timestamp, cc.tags,
+                        distance
+                    FROM content_vectors
+                    JOIN crawled_content cc ON content_vectors.content_id = cc.id
+                    WHERE embedding MATCH ? AND k = ? AND ({tag_conditions})
+                    ORDER BY distance
+                '''
+                params = (query_bytes, limit * 5, *tag_params)  # Request more results to account for deduplication
+                results = self.execute_with_retry(sql, params).fetchall()
+            else:
+                # No tag filtering - request more to account for deduplication
+                results = self.execute_with_retry('''
+                    SELECT
+                        cc.url, cc.title, cc.markdown, cc.content, cc.timestamp, cc.tags,
+                        distance
+                    FROM content_vectors
+                    JOIN crawled_content cc ON content_vectors.content_id = cc.id
+                    WHERE embedding MATCH ? AND k = ?
+                    ORDER BY distance
+                ''', (query_bytes, limit * 5)).fetchall()
+
+            # Deduplicate by URL - keep only the best match per URL
+            seen_urls = {}
+            for row in results:
+                url = row[0]
+                distance = row[6]
+                # Use markdown with fallback to content
+                content_text = row[2] if row[2] else row[3]
+                if url not in seen_urls or distance < seen_urls[url]['distance']:
+                    seen_urls[url] = {
+                        'url': row[0],
+                        'title': row[1],
+                        'content': content_text[:10000] + '...' if len(content_text) > 10000 else content_text,
+                        'timestamp': row[4],
+                        'tags': row[5],
+                        'distance': distance,
+                        'similarity_score': 1 - distance if distance <= 1.0 else 1.0 / (1.0 + distance)
+                    }
+
+            # Sort by similarity and limit
+            deduplicated = sorted(seen_urls.values(), key=lambda x: x['similarity_score'], reverse=True)[:limit]
+
+            # Remove distance field from output
             return [
-                {
-                    'url': row[0],
-                    'title': row[1],
-                    'content': row[2][:500] + '...' if len(row[2]) > 500 else row[2],
-                    'timestamp': row[3],
-                    'tags': row[4],
-                    'similarity_score': 1 - row[5] if row[5] <= 1.0 else 1.0 / (1.0 + row[5])
-                }
-                for row in results
+                {k: v for k, v in result.items() if k != 'distance'}
+                for result in deduplicated
             ]
         except Exception as e:
             log_error("search_similar", e)
             raise
+
+    def target_search(self, query: str, initial_limit: int = 5, expanded_limit: int = 20) -> Dict[str, Any]:
+        """
+        Intelligent search that discovers tags from initial results and expands search
+
+        Args:
+            query: Search query string
+            initial_limit: Number of results in initial search (for tag discovery)
+            expanded_limit: Maximum results in expanded tag-based search
+
+        Returns:
+            Dictionary with results, discovered tags, and expansion metadata
+        """
+        try:
+            # Step 1: Initial semantic search to discover tags
+            initial_results = self.search_similar(query, limit=initial_limit)
+
+            # Step 2: Extract unique tags from initial results
+            all_tags = set()
+            for result in initial_results:
+                if result.get('tags'):
+                    # Split comma-separated tags and clean whitespace
+                    tags = [tag.strip() for tag in result['tags'].split(',') if tag.strip()]
+                    all_tags.update(tags)
+
+            # Step 3: If no tags found, return initial results
+            if not all_tags:
+                return {
+                    "success": True,
+                    "query": query,
+                    "results": initial_results,
+                    "discovered_tags": [],
+                    "expansion_used": False,
+                    "initial_results_count": len(initial_results),
+                    "expanded_results_count": len(initial_results)
+                }
+
+            # Step 4: Re-search with tag filtering for expansion
+            expanded_results = self.search_similar(query, limit=expanded_limit, tags=list(all_tags))
+
+            # Step 5: Deduplicate by URL (keep highest similarity score)
+            deduped = {}
+            for result in expanded_results:
+                url = result['url']
+                if url not in deduped or result['similarity_score'] > deduped[url]['similarity_score']:
+                    deduped[url] = result
+
+            # Step 6: Sort by similarity score (descending)
+            final_results = sorted(deduped.values(), key=lambda x: x['similarity_score'], reverse=True)
+
+            # Step 7: Return aggregated results with metadata
+            return {
+                "success": True,
+                "query": query,
+                "results": final_results,
+                "discovered_tags": sorted(list(all_tags)),
+                "expansion_used": True,
+                "initial_results_count": len(initial_results),
+                "expanded_results_count": len(final_results)
+            }
+
+        except Exception as e:
+            log_error("target_search", e)
+            return {
+                "success": False,
+                "error": str(e),
+                "query": query,
+                "results": [],
+                "discovered_tags": [],
+                "expansion_used": False
+            }
 
     def list_content(self, retention_policy: Optional[str] = None, limit: int = 100) -> Dict[str, Any]:
         """

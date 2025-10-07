@@ -289,8 +289,27 @@ class Crawl4AIRAG:
 
     def _add_links_to_queue(self, links: dict, visited: set, queue: list,
                             current_depth: int, base_domain: str, include_external: bool):
-        """Extract internal links and add to BFS queue, filtering out blocked domains"""
+        """Extract internal links and add to BFS queue, filtering out blocked domains and social media"""
         from core.data.storage import GLOBAL_DB
+
+        # Social media and unwanted link patterns to exclude from deep crawl
+        SOCIAL_MEDIA_PATTERNS = [
+            'facebook.com', 'fb.com', 'instagram.com', 'twitter.com', 'x.com',
+            'linkedin.com', 'tiktok.com', 'pinterest.com', 'bluesky.social',
+            'reddit.com', 'discourse.', 'forum.', 'mailto:', 'donate', 'donation',
+            'youtube.com', 'youtu.be', 'vimeo.com', 'dailymotion.com',
+            'snapchat.com', 'whatsapp.com', 'telegram.', 'discord.gg', 'discord.com',
+            'twitch.tv', 'medium.com/@', 'substack.com', 'patreon.com'
+        ]
+
+        # Adult content word filter - exclude URLs containing these words
+        ADULT_CONTENT_WORDS = [
+            'dick', 'pussy', 'cock', 'tits', 'boobs', 'slut', 'cunt', 'fuck',
+            'anal', 'cum', 'throat', 'deepthroat', 'rape', 'incest', 'porn',
+            'pron', 'spitroast', 'trans', 'gay', 'bisexual', 'girlongirl',
+            'lesbian'
+        ]
+
         internal_links = links.get("internal", [])
 
         for link in internal_links:
@@ -302,6 +321,17 @@ class Crawl4AIRAG:
             block_check = GLOBAL_DB.is_domain_blocked(link_url)
             if block_check.get("blocked"):
                 print(f"⊘ Blocked domain: {link_url} (pattern: {block_check.get('pattern')})", file=sys.stderr, flush=True)
+                continue
+
+            # Check for social media and unwanted patterns
+            link_lower = link_url.lower()
+            if any(pattern in link_lower for pattern in SOCIAL_MEDIA_PATTERNS):
+                print(f"⊘ Skipping social/unwanted link: {link_url}", file=sys.stderr, flush=True)
+                continue
+
+            # Check for adult content words in URL
+            if any(word in link_lower for word in ADULT_CONTENT_WORDS):
+                print(f"⊘ Skipping adult content link: {link_url}", file=sys.stderr, flush=True)
                 continue
 
             # Domain check
@@ -504,14 +534,15 @@ class Crawl4AIRAG:
             "message": f"Processed {processed_count} pages from ingestion queue"
         }
 
-    async def search_knowledge(self, query: str, limit: int = 10, filters: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    async def search_knowledge(self, query: str, limit: int = 10, tags: Optional[List[str]] = None, filters: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Search the knowledge base using semantic search
 
         Args:
             query: Search query string
             limit: Maximum number of results to return
-            filters: Optional filters (e.g., tags, retention_policy)
+            tags: Optional list of tags to filter by (ANY match)
+            filters: Optional filters (e.g., retention_policy)
 
         Returns:
             Dict with search results
@@ -520,14 +551,17 @@ class Crawl4AIRAG:
             from core.data.storage import GLOBAL_DB
 
             print(f"Searching knowledge base for: {query}", file=sys.stderr, flush=True)
+            if tags:
+                print(f"Filtering by tags: {tags}", file=sys.stderr, flush=True)
 
-            results = GLOBAL_DB.search_similar(query, limit=limit)
+            results = GLOBAL_DB.search_similar(query, limit=limit, tags=tags)
 
             return {
                 "success": True,
                 "query": query,
                 "results": results,
                 "count": len(results),
+                "tags_filter": tags if tags else None,
                 "message": f"Found {len(results)} results for '{query}'"
             }
 
@@ -539,6 +573,40 @@ class Crawl4AIRAG:
                 "query": query,
                 "results": [],
                 "count": 0
+            }
+
+    async def target_search(self, query: str, initial_limit: int = 5, expanded_limit: int = 20) -> Dict[str, Any]:
+        """
+        Intelligent search that discovers tags from initial results and expands search
+
+        Args:
+            query: Search query string
+            initial_limit: Number of results in initial search (for tag discovery)
+            expanded_limit: Maximum results in expanded tag-based search
+
+        Returns:
+            Dict with results, discovered tags, and expansion metadata
+        """
+        try:
+            from core.data.storage import GLOBAL_DB
+
+            print(f"Target search for: {query}", file=sys.stderr, flush=True)
+
+            result = GLOBAL_DB.target_search(query, initial_limit, expanded_limit)
+
+            print(f"Discovered {len(result.get('discovered_tags', []))} tags, returned {len(result.get('results', []))} results", file=sys.stderr, flush=True)
+
+            return result
+
+        except Exception as e:
+            print(f"Error in target search: {str(e)}", file=sys.stderr, flush=True)
+            return {
+                "success": False,
+                "error": str(e),
+                "query": query,
+                "results": [],
+                "discovered_tags": [],
+                "expansion_used": False
             }
 
     async def get_database_stats(self) -> Dict[str, Any]:
