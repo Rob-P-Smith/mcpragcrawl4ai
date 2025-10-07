@@ -95,9 +95,21 @@ async def initialize_async(self):
 The system uses differential synchronization to only sync changed records:
 
 1. **Change Tracking**: Database triggers automatically track all INSERT, UPDATE, and DELETE operations in the `_sync_tracker` table
-2. **Idle Detection**: After 5 seconds of no write activity, pending changes are synced to disk
+2. **Idle Detection**: After 5 seconds of no write activity, pending changes are synced to disk **once** (prevented from repeating by `idle_sync_completed` flag)
 3. **Periodic Sync**: Every 5 minutes, any pending changes are synced regardless of idle time
 4. **Batch Processing**: Changes are grouped by table and synced in batches for efficiency
+5. **Write Detection**: Any new write resets the `idle_sync_completed` flag, allowing the next idle sync to occur
+
+### Idle Sync Optimization
+
+To prevent redundant disk writes when the system is mostly idle, the sync manager uses an `idle_sync_completed` boolean flag:
+
+- **On New Write**: Flag is set to `false`, idle timer starts
+- **After 5s Idle**: If changes pending and flag is `false`, sync occurs and flag is set to `true`
+- **While Idle**: Further idle checks skip syncing since flag is `true`
+- **On Next Write**: Flag resets to `false`, cycle repeats
+
+This ensures the disk is updated **once** after each burst of writes, not continuously while idle.
 
 ### Sync Triggers
 
