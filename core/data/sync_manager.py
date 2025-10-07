@@ -23,6 +23,7 @@ class DBSyncManager:
         self.last_write_time: Optional[float] = None
         self.sync_lock = asyncio.Lock()
         self.is_syncing = False
+        self.idle_sync_completed = False  # Track if idle sync already done since last write
 
         # Metrics
         self.metrics = {
@@ -144,6 +145,7 @@ class DBSyncManager:
         The actual change tracking is handled by triggers for regular tables
         """
         self.last_write_time = time.time()
+        self.idle_sync_completed = False  # Reset flag on new write
 
     async def track_vector_change(self, content_id: int, operation: str = 'INSERT'):
         """
@@ -159,6 +161,7 @@ class DBSyncManager:
         """, (content_id, operation))
         self.memory_conn.commit()
         self.last_write_time = time.time()
+        self.idle_sync_completed = False  # Reset flag on new write
 
     async def _idle_sync_monitor(self):
         """
@@ -167,13 +170,20 @@ class DBSyncManager:
         Runs forever:
         1. Sleep for 1 second
         2. Check if (current_time - last_write_time) > 5 seconds
-        3. If yes and changes pending → trigger sync
+        3. If yes and changes pending and not already synced → trigger sync
         4. Repeat
+
+        Uses idle_sync_completed flag to prevent redundant syncs.
+        Flag is reset on new writes, preventing constant disk updates when idle.
         """
         while True:
             await asyncio.sleep(1)
 
             if self.last_write_time is None or self.is_syncing:
+                continue
+
+            # Skip if idle sync already completed since last write
+            if self.idle_sync_completed:
                 continue
 
             idle_time = time.time() - self.last_write_time
@@ -188,6 +198,7 @@ class DBSyncManager:
             if idle_time >= 5.0 and pending > 0:
                 print(f"💤 Idle detected ({idle_time:.1f}s), syncing {pending} changes to disk...")
                 await self.differential_sync()
+                self.idle_sync_completed = True  # Mark idle sync as completed
 
     async def _periodic_sync_monitor(self):
         """
