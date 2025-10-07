@@ -160,7 +160,7 @@ class SQLInjectionDefense:
         # Adult content word filter - block URLs containing these words anywhere
         ADULT_CONTENT_WORDS = [
             'dick', 'pussy', 'cock', 'tits', 'boobs', 'slut', 'cunt', 'fuck',
-            'anal', 'cum', 'throat', 'deepthroat', 'rape', 'incest', 'porn',
+            'anal', 'throat', 'deepthroat', 'rape', 'incest', 'porn',
             'pron', 'spitroast', 'trans', 'gay', 'bisexual', 'girlongirl',
             'lesbian', 'xxx', 'nsfw', 'nude', 'naked', 'sex', 'hentai',
             'adullt', 'erotic', 'fetish', 'bdsm', 'milf'
