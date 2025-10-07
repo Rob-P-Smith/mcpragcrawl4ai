@@ -4,11 +4,13 @@ Complete documentation for the Crawl4AI RAG (Retrieval-Augmented Generation) MCP
 
 ## Overview
 
-This system provides a local homelab-friendly RAG solution that combines:
-- **Crawl4AI** for web content extraction
+This system provides a production-ready RAG solution that combines:
+- **Crawl4AI** for intelligent web content extraction with markdown conversion
 - **SQLite + sqlite-vec** for vector storage and semantic search
-- **LM-Studio MCP integration** for AI assistant interaction
-- **REST API layer** for bidirectional communication
+- **RAM Database Mode** for 10-50x faster queries via differential sync
+- **MCP integration** for AI assistants (LM-Studio, Claude Desktop, etc.)
+- **REST API** with 15+ endpoints for remote access and integration
+- **Security Layer** with input sanitization and domain blocking
 
 ## Quick Links
 
@@ -18,9 +20,15 @@ This system provides a local homelab-friendly RAG solution that combines:
 - [Installation Guide](#installation-guide) - Detailed setup instructions
 
 ### API & Integration
-- [API Documentation](API_README.md) - REST API reference
-- [API Endpoints](api/endpoints.md) - Detailed endpoint documentation
+- [API Overview](api/index.md) - REST API introduction
+- [API Endpoints](api/endpoints.md) - Complete endpoint reference
+- [API Documentation](API_README.md) - Legacy API reference
 - [Docker Setup](docker/index.md) - Docker deployment guide
+
+### Advanced Features
+- [RAM Database Mode](advanced/ram-database.md) - In-memory database with differential sync
+- [Security Features](advanced/security.md) - Input sanitization and domain blocking
+- [Batch Operations](advanced/batch-operations.md) - Batch crawling and database restoration
 
 ### Guides
 - [Deployment Options](deployments.md) - Server, Client, and Local deployment
@@ -88,6 +96,7 @@ docker run -d --name crawl4ai -p 11235:11235 unclecode/crawl4ai:latest
 ```bash
 cat > .env << EOF
 IS_SERVER=true
+USE_MEMORY_DB=true
 LOCAL_API_KEY=$(openssl rand -base64 32)
 CRAWL4AI_URL=http://localhost:11235
 EOF
@@ -107,7 +116,9 @@ For detailed instructions, see the [Quick Start Guide](guides/quick-start.md).
 - **core/rag_processor.py**: Main MCP server implementation and JSON-RPC handling
 - **core/operations/crawler.py**: Web crawling logic and deep crawling functionality
 - **core/data/storage.py**: Database operations, content storage, and vector embeddings
-- **core/utilities/**: Helper scripts for testing and batch operations
+- **core/data/sync_manager.py**: RAM database synchronization with differential sync
+- **core/data/dbdefense.py**: Security layer for input sanitization and SQL injection prevention
+- **core/utilities/**: Helper scripts including dbstats.py and batch_crawler.py
 
 ### API Layer
 
@@ -132,11 +143,19 @@ The MCP server provides the following tools:
 4. **deep_crawl_dfs** - Deep crawl multiple pages using depth-first search without storing
 5. **deep_crawl_and_store** - Deep crawl multiple pages using DFS and store all in knowledge base
 
-### Knowledge Management
-6. **search_memory** - Semantic search of stored content
-7. **list_memory** - List all stored content with optional filtering
-8. **forget_url** - Remove specific content by URL
-9. **clear_temp_memory** - Clear temporary session content
+### Search & Knowledge Management
+6. **search_memory** - Semantic search with tag filtering and deduplication
+7. **target_search** - Intelligent search with automatic tag expansion
+8. **list_memory** - List all stored content with optional filtering
+9. **forget_url** - Remove specific content by URL
+10. **clear_temp_memory** - Clear temporary session content
+
+### Database & Security Tools
+11. **get_database_stats** - Database statistics with RAM/disk mode indicator
+12. **list_domains** - List all unique domains with page counts
+13. **block_domain** - Block domains from being crawled (supports wildcards)
+14. **unblock_domain** - Remove domain from blocklist
+15. **list_blocked_domains** - View all blocked domain patterns
 
 ## Deployment Options
 
@@ -170,6 +189,7 @@ Lightweight client forwarding requests to remote server.
 
 **Database:**
 - `DB_PATH` - SQLite database path (default: `crawl4ai_rag.db`)
+- `USE_MEMORY_DB` - Enable RAM database mode (default: `true`)
 
 **Services:**
 - `CRAWL4AI_URL` - Crawl4AI service URL (default: `http://localhost:11235`)
@@ -214,13 +234,24 @@ For Docker client deployment:
 
 ## Features
 
-- **Local Homelab Deployment**: Runs entirely on your personal computer or home server
-- **MCP Integration**: Works seamlessly with LM-Studio and other MCP-compatible AI assistants
-- **Semantic Search**: Vector-based content retrieval using sqlite-vec
-- **Bidirectional Communication**: REST API layer supports both server and client modes
-- **Deep Crawling**: Advanced DFS crawling with customizable parameters (max depth 5, max pages 250)
-- **Content Management**: Full CRUD operations for stored content
-- **Security**: API key authentication and rate limiting
+### Performance
+- **RAM Database Mode**: In-memory SQLite with 10-50x faster queries (see [RAM Database Guide](advanced/ram-database.md))
+- **Differential Sync**: Idle (5s) and periodic (5min) sync to disk
+- **Vector Search**: 384-dimensional embeddings with similarity search
+- **Efficient Storage**: Markdown conversion and content chunking
+
+### Functionality
+- **MCP Integration**: Full protocol support for AI assistants (LM-Studio, Claude Desktop, etc.)
+- **Deep Crawling**: DFS-based multi-page crawling (max depth 5, max pages 250)
+- **Semantic Search**: Vector-based retrieval with tag filtering and deduplication
+- **Content Management**: Full CRUD operations with retention policies
+- **Bidirectional Communication**: Server and client modes for flexible deployment
+
+### Security
+- **Input Sanitization**: Comprehensive SQL injection defense (see [Security Guide](advanced/security.md))
+- **Domain Blocking**: Wildcard-based blocking with social media and NSFW filters
+- **API Authentication**: Bearer token authentication with rate limiting
+- **URL Validation**: Prevents access to internal/private networks
 - **Session Management**: Automatic cleanup of temporary content
 
 ## Deep Crawling Features

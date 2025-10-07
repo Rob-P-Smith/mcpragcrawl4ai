@@ -21,8 +21,14 @@ class RateLimiter:
     def __init__(self):
         self.requests = defaultdict(list)
         self.max_requests = int(os.getenv("RATE_LIMIT_PER_MINUTE", "60"))
+        # Allow disabling rate limiter for bulk operations
+        self.enabled = os.getenv("ENABLE_RATE_LIMIT", "true").lower() == "true"
 
     def is_allowed(self, api_key: str) -> bool:
+        # If rate limiting is disabled, always allow
+        if not self.enabled:
+            return True
+
         now = time.time()
         minute_ago = now - 60
 

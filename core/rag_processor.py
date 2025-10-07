@@ -93,6 +93,46 @@ class MCPServer:
                 }
             },
             {
+                "name": "list_domains",
+                "description": "List all unique website domains (e.g., github.com, cnn.com) that have been stored in the knowledge base with page counts",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {}
+                }
+            },
+            {
+                "name": "add_blocked_domain",
+                "description": "Add a domain pattern to the blocklist. Supports wildcards (*.ru blocks all .ru domains) and keywords (*porn* blocks URLs containing 'porn')",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "pattern": {"type": "string", "description": "Domain pattern to block (e.g., *.ru, *.cn, *porn*, example.com)"},
+                        "description": {"type": "string", "description": "Optional description of why this pattern is blocked"}
+                    },
+                    "required": ["pattern"]
+                }
+            },
+            {
+                "name": "remove_blocked_domain",
+                "description": "Remove a domain pattern from the blocklist",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "pattern": {"type": "string", "description": "Domain pattern to unblock"},
+                        "keyword": {"type": "string", "description": "Authorization keyword"}
+                    },
+                    "required": ["pattern", "keyword"]
+                }
+            },
+            {
+                "name": "list_blocked_domains",
+                "description": "List all currently blocked domain patterns",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {}
+                }
+            },
+            {
                 "name": "forget_url",
                 "description": "Remove specific content by URL",
                 "inputSchema": {
@@ -135,6 +175,14 @@ class MCPServer:
                         "test": {"type": "string", "description": "Test parameter"}
                     },
                     "required": ["test"]
+                }
+            },
+            {
+                "name": "get_help",
+                "description": "Get comprehensive help documentation for all available tools with examples and parameter types",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {}
                 }
             }
         ]
@@ -217,12 +265,29 @@ class MCPServer:
                 elif tool_name == "search_memory":
                     query = validate_string_length(arguments["query"], 500, "query")
                     limit = validate_integer_range(arguments.get("limit", 5), 1, 1000, "limit")
+                    tags_str = arguments.get("tags")
+                    tags_list = None
+                    if tags_str:
+                        tags_str = validate_string_length(tags_str, 500, "tags")
+                        tags_list = [tag.strip() for tag in tags_str.split(',') if tag.strip()]
+
                     if IS_CLIENT_MODE:
-                        api_result = await api_client.search_knowledge(query, limit)
+                        api_result = await api_client.search_knowledge(query, limit, tags=tags_str if tags_str else None)
                         result = api_result.get("data", api_result)
                     else:
-                        result = await self.rag.search_knowledge(query, limit)
-                
+                        result = await self.rag.search_knowledge(query, limit, tags=tags_list)
+
+                elif tool_name == "target_search":
+                    query = validate_string_length(arguments["query"], 500, "query")
+                    initial_limit = validate_integer_range(arguments.get("initial_limit", 5), 1, 100, "initial_limit")
+                    expanded_limit = validate_integer_range(arguments.get("expanded_limit", 20), 1, 1000, "expanded_limit")
+
+                    if IS_CLIENT_MODE:
+                        api_result = await api_client.target_search(query, initial_limit, expanded_limit)
+                        result = api_result.get("data", api_result)
+                    else:
+                        result = await self.rag.target_search(query, initial_limit, expanded_limit)
+
                 elif tool_name == "list_memory":
                     filter_param = arguments.get("filter")
                     if filter_param:
@@ -245,10 +310,50 @@ class MCPServer:
                     else:
                         result = await self.rag.get_database_stats()
 
+                elif tool_name == "list_domains":
+                    if IS_CLIENT_MODE:
+                        api_result = await api_client.list_domains()
+                        result = api_result.get("data", api_result)
+                    else:
+                        result = await self.rag.list_domains()
+
+                elif tool_name == "add_blocked_domain":
+                    pattern = arguments["pattern"]
+                    description = arguments.get("description", "")
+                    if IS_CLIENT_MODE:
+                        api_result = await api_client.add_blocked_domain(pattern, description)
+                        result = api_result.get("data", api_result)
+                    else:
+                        result = await self.rag.add_blocked_domain(pattern, description)
+
+                elif tool_name == "remove_blocked_domain":
+                    pattern = arguments["pattern"]
+                    keyword = arguments.get("keyword", "")
+                    if IS_CLIENT_MODE:
+                        api_result = await api_client.remove_blocked_domain(pattern, keyword)
+                        result = api_result.get("data", api_result)
+                    else:
+                        result = await self.rag.remove_blocked_domain(pattern, keyword)
+
+                elif tool_name == "list_blocked_domains":
+                    if IS_CLIENT_MODE:
+                        api_result = await api_client.list_blocked_domains()
+                        result = api_result.get("data", api_result)
+                    else:
+                        result = await self.rag.list_blocked_domains()
+
                 elif tool_name == "forget_url":
                     url = arguments["url"]
-                    if not validate_url(url):
-                        result = {"success": False, "error": "Invalid or unsafe URL provided"}
+
+                    # Basic validation to prevent SQL injection
+                    dangerous_patterns = [
+                        'SELECT', 'INSERT', 'UPDATE', 'DELETE', 'DROP', 'CREATE',
+                        'ALTER', 'TRUNCATE', 'EXEC', 'EXECUTE', '--', ';--',
+                        'UNION', 'SCRIPT', '<script'
+                    ]
+                    url_upper = url.upper()
+                    if any(pattern in url_upper for pattern in dangerous_patterns):
+                        result = {"success": False, "error": "Invalid URL: contains dangerous patterns"}
                     else:
                         if IS_CLIENT_MODE:
                             api_result = await api_client.forget_url(url)
@@ -301,7 +406,88 @@ class MCPServer:
                                 url, retention_policy, tags, max_depth, max_pages,
                                 include_external, score_threshold, timeout
                             )
-                
+
+                elif tool_name == "get_help":
+                    if IS_CLIENT_MODE:
+                        result = await api_client.get_help()
+                    else:
+                        result = {
+                            "success": True,
+                            "tools": [
+                                {
+                                    "name": "crawl_url",
+                                    "example": "Crawl http://www.example.com without storing",
+                                    "parameters": "url: string"
+                                },
+                                {
+                                    "name": "crawl_and_remember",
+                                    "example": "Crawl and permanently store https://github.com/anthropics/anthropic-sdk-python",
+                                    "parameters": "url: string, tags?: string"
+                                },
+                                {
+                                    "name": "crawl_temp",
+                                    "example": "Crawl and temporarily store https://news.ycombinator.com",
+                                    "parameters": "url: string, tags?: string"
+                                },
+                                {
+                                    "name": "deep_crawl_and_store",
+                                    "example": "Deep crawl https://docs.python.org starting from main page",
+                                    "parameters": "url: string, max_depth?: number (1-5, default 2), max_pages?: number (1-250, default 10), retention_policy?: string (permanent|session_only|30_days, default permanent), tags?: string, include_external?: boolean, score_threshold?: number (0.0-1.0), timeout?: number (60-1800 seconds)"
+                                },
+                                {
+                                    "name": "search_memory",
+                                    "example": "Search for 'async python patterns' in stored knowledge",
+                                    "parameters": "query: string, limit?: number (default 5, max 1000)"
+                                },
+                                {
+                                    "name": "list_memory",
+                                    "example": "List all stored pages or filter by retention policy",
+                                    "parameters": "filter?: string (permanent|session_only|30_days), limit?: number (default 100, max 1000)"
+                                },
+                                {
+                                    "name": "db_stats",
+                                    "example": "Get database statistics including record counts, storage size, and recent activity",
+                                    "parameters": "none"
+                                },
+                                {
+                                    "name": "list_domains",
+                                    "example": "List all unique domains stored (e.g., github.com, docs.python.org) with page counts",
+                                    "parameters": "none"
+                                },
+                                {
+                                    "name": "add_blocked_domain",
+                                    "example": "Block all .ru domains or URLs containing 'spam': pattern='*.ru' or pattern='*spam*'",
+                                    "parameters": "pattern: string (e.g., *.ru, *.cn, *spam*, example.com), description?: string"
+                                },
+                                {
+                                    "name": "remove_blocked_domain",
+                                    "example": "Unblock a previously blocked domain pattern",
+                                    "parameters": "pattern: string, keyword: string (authorization required)"
+                                },
+                                {
+                                    "name": "list_blocked_domains",
+                                    "example": "Show all currently blocked domain patterns",
+                                    "parameters": "none"
+                                },
+                                {
+                                    "name": "forget_url",
+                                    "example": "Remove specific URL from knowledge base: url='https://example.com/page'",
+                                    "parameters": "url: string"
+                                },
+                                {
+                                    "name": "clear_temp_memory",
+                                    "example": "Clear all temporary/session-only content from current session",
+                                    "parameters": "none"
+                                }
+                            ],
+                            "usage_notes": {
+                                "retention_policies": ["permanent", "session_only", "30_days"],
+                                "url_validation": "All URLs are validated for safety and proper format",
+                                "blocking_patterns": "Use * as wildcard (*.ru blocks all .ru domains, *spam* blocks URLs with 'spam')",
+                                "limits": "Search/list limits are capped at 1000 results maximum"
+                            }
+                        }
+
                 else:
                     result = {"success": False, "error": f"Unknown tool: {tool_name}"}
 

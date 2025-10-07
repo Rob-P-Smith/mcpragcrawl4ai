@@ -14,11 +14,14 @@ import traceback
 import logging
 import threading
 import numpy as np
+import asyncio
 from contextlib import contextmanager
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 
 from sentence_transformers import SentenceTransformer
+from core.data.sync_manager import DBSyncManager
+
 GLOBAL_MODEL = SentenceTransformer('all-MiniLM-L6-v2')
 
 class RAGDatabase:
@@ -34,7 +37,32 @@ class RAGDatabase:
         self.embedder = GLOBAL_MODEL
         self.db_lock = threading.RLock()
         self._connection_closed = False
-        self.init_database()
+
+        # RAM Database support
+        self.is_memory_mode = os.getenv("USE_MEMORY_DB", "true").lower() == "true"
+        self.sync_manager = None
+
+        if self.is_memory_mode:
+            print("🚀 RAM Database mode enabled")
+            self.sync_manager = DBSyncManager(db_path)
+            # Connection will be set by initialize_async()
+            # Don't call init_database() yet
+        else:
+            print("💾 Disk Database mode (traditional)")
+            self.init_database()
+
+    async def initialize_async(self):
+        """
+        Initialize memory database (called from start_api_server.py on startup)
+        Only needed when USE_MEMORY_DB=true
+        """
+        if self.sync_manager and self.db is None:
+            self.db = await self.sync_manager.initialize()
+            self.init_database()  # Create tables if needed in memory
+            print("✅ RAM Database initialized and ready")
+        elif not self.is_memory_mode and self.db is None:
+            # Fallback for disk mode
+            self.init_database()
 
     def __del__(self):
         self.close()
@@ -133,6 +161,13 @@ class RAGDatabase:
                         last_active DATETIME DEFAULT CURRENT_TIMESTAMP
                     );
 
+                    CREATE TABLE IF NOT EXISTS blocked_domains (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        pattern TEXT UNIQUE NOT NULL,
+                        description TEXT,
+                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    );
+
                     CREATE VIRTUAL TABLE IF NOT EXISTS content_vectors USING vec0(
                         embedding FLOAT[384],
                         content_id INTEGER
@@ -141,6 +176,23 @@ class RAGDatabase:
 
                 self.db.execute("INSERT OR REPLACE INTO sessions (session_id, last_active) VALUES (?, CURRENT_TIMESTAMP)",
                                (self.session_id,))
+
+                # Populate initial blocked domains if table is empty
+                blocked_count = self.db.execute("SELECT COUNT(*) FROM blocked_domains").fetchone()[0]
+                if blocked_count == 0:
+                    initial_blocks = [
+                        ("*.ru", "Block all Russian domains"),
+                        ("*.cn", "Block all Chinese domains"),
+                        ("*porn*", "Block URLs containing 'porn'"),
+                        ("*sex*", "Block URLs containing 'sex'"),
+                        ("*escort*", "Block URLs containing 'escort'"),
+                        ("*massage*", "Block URLs containing 'massage'")
+                    ]
+                    self.db.executemany(
+                        "INSERT OR IGNORE INTO blocked_domains (pattern, description) VALUES (?, ?)",
+                        initial_blocks
+                    )
+
                 self.db.commit()
         except Exception as e:
             log_error("init_database", e)
@@ -182,7 +234,19 @@ class RAGDatabase:
                 ''', (url, title, content, markdown, content_hash, self.session_id, retention_policy, tags, metadata_json))
 
                 content_id = cursor.lastrowid
-                self.generate_embeddings(content_id, content)
+                # Use markdown for embeddings with fallback to content
+                embedding_text = markdown if markdown else content
+                self.generate_embeddings(content_id, embedding_text)
+
+                # Track write for sync (non-blocking)
+                # Note: content_vectors tracked separately in generate_embeddings()
+                if self.sync_manager:
+                    try:
+                        loop = asyncio.get_event_loop()
+                        loop.create_task(self.sync_manager.track_write('crawled_content'))
+                    except RuntimeError:
+                        # Event loop not running, skip tracking
+                        pass
 
                 return {
                     "success": True,
@@ -206,45 +270,169 @@ class RAGDatabase:
                 (embedding.astype(np.float32).tobytes(), content_id)
                 for embedding in embeddings
             ]
-            
+
             with self.db_lock:
                 self.db.executemany('''
                     INSERT INTO content_vectors (embedding, content_id)
                     VALUES (?, ?)
                 ''', embedding_data)
+
+            # Track vector changes for RAM DB sync (can't use triggers on virtual tables)
+            if self.sync_manager:
+                try:
+                    loop = asyncio.get_event_loop()
+                    loop.create_task(self.sync_manager.track_vector_change(content_id, 'INSERT'))
+                except RuntimeError:
+                    pass
         except Exception as e:
             log_error("generate_embeddings", e)
             raise
 
-    def search_similar(self, query: str, limit: int = 5) -> List[Dict]:
+    def search_similar(self, query: str, limit: int = 5, tags: Optional[List[str]] = None) -> List[Dict]:
+        """
+        Search for similar content using vector similarity
+
+        Args:
+            query: Search query string
+            limit: Maximum number of results
+            tags: Optional list of tags to filter by (ANY match)
+
+        Returns:
+            List of matching documents with similarity scores
+        """
         try:
             query_embedding = self.embedder.encode([query])[0]
             query_bytes = query_embedding.astype(np.float32).tobytes()
 
-            results = self.execute_with_retry('''
-                SELECT
-                    cc.url, cc.title, cc.content, cc.timestamp, cc.tags,
-                    distance
-                FROM content_vectors
-                JOIN crawled_content cc ON content_vectors.content_id = cc.id
-                WHERE embedding MATCH ? AND k = ?
-                ORDER BY distance
-            ''', (query_bytes, limit)).fetchall()
+            # Build tag filter condition if tags provided
+            if tags and len(tags) > 0:
+                # Create OR conditions for tag matching
+                tag_conditions = ' OR '.join(['cc.tags LIKE ?' for _ in tags])
+                tag_params = [f'%{tag}%' for tag in tags]
 
+                sql = f'''
+                    SELECT
+                        cc.url, cc.title, cc.markdown, cc.content, cc.timestamp, cc.tags,
+                        distance
+                    FROM content_vectors
+                    JOIN crawled_content cc ON content_vectors.content_id = cc.id
+                    WHERE embedding MATCH ? AND k = ? AND ({tag_conditions})
+                    ORDER BY distance
+                '''
+                params = (query_bytes, limit * 5, *tag_params)  # Request more results to account for deduplication
+                results = self.execute_with_retry(sql, params).fetchall()
+            else:
+                # No tag filtering - request more to account for deduplication
+                results = self.execute_with_retry('''
+                    SELECT
+                        cc.url, cc.title, cc.markdown, cc.content, cc.timestamp, cc.tags,
+                        distance
+                    FROM content_vectors
+                    JOIN crawled_content cc ON content_vectors.content_id = cc.id
+                    WHERE embedding MATCH ? AND k = ?
+                    ORDER BY distance
+                ''', (query_bytes, limit * 5)).fetchall()
+
+            # Deduplicate by URL - keep only the best match per URL
+            seen_urls = {}
+            for row in results:
+                url = row[0]
+                distance = row[6]
+                # Use markdown with fallback to content
+                content_text = row[2] if row[2] else row[3]
+                if url not in seen_urls or distance < seen_urls[url]['distance']:
+                    seen_urls[url] = {
+                        'url': row[0],
+                        'title': row[1],
+                        'content': content_text[:10000] + '...' if len(content_text) > 10000 else content_text,
+                        'timestamp': row[4],
+                        'tags': row[5],
+                        'distance': distance,
+                        'similarity_score': 1 - distance if distance <= 1.0 else 1.0 / (1.0 + distance)
+                    }
+
+            # Sort by similarity and limit
+            deduplicated = sorted(seen_urls.values(), key=lambda x: x['similarity_score'], reverse=True)[:limit]
+
+            # Remove distance field from output
             return [
-                {
-                    'url': row[0],
-                    'title': row[1],
-                    'content': row[2][:500] + '...' if len(row[2]) > 500 else row[2],
-                    'timestamp': row[3],
-                    'tags': row[4],
-                    'similarity_score': 1 - row[5] if row[5] <= 1.0 else 1.0 / (1.0 + row[5])
-                }
-                for row in results
+                {k: v for k, v in result.items() if k != 'distance'}
+                for result in deduplicated
             ]
         except Exception as e:
             log_error("search_similar", e)
             raise
+
+    def target_search(self, query: str, initial_limit: int = 5, expanded_limit: int = 20) -> Dict[str, Any]:
+        """
+        Intelligent search that discovers tags from initial results and expands search
+
+        Args:
+            query: Search query string
+            initial_limit: Number of results in initial search (for tag discovery)
+            expanded_limit: Maximum results in expanded tag-based search
+
+        Returns:
+            Dictionary with results, discovered tags, and expansion metadata
+        """
+        try:
+            # Step 1: Initial semantic search to discover tags
+            initial_results = self.search_similar(query, limit=initial_limit)
+
+            # Step 2: Extract unique tags from initial results
+            all_tags = set()
+            for result in initial_results:
+                if result.get('tags'):
+                    # Split comma-separated tags and clean whitespace
+                    tags = [tag.strip() for tag in result['tags'].split(',') if tag.strip()]
+                    all_tags.update(tags)
+
+            # Step 3: If no tags found, return initial results
+            if not all_tags:
+                return {
+                    "success": True,
+                    "query": query,
+                    "results": initial_results,
+                    "discovered_tags": [],
+                    "expansion_used": False,
+                    "initial_results_count": len(initial_results),
+                    "expanded_results_count": len(initial_results)
+                }
+
+            # Step 4: Re-search with tag filtering for expansion
+            expanded_results = self.search_similar(query, limit=expanded_limit, tags=list(all_tags))
+
+            # Step 5: Deduplicate by URL (keep highest similarity score)
+            deduped = {}
+            for result in expanded_results:
+                url = result['url']
+                if url not in deduped or result['similarity_score'] > deduped[url]['similarity_score']:
+                    deduped[url] = result
+
+            # Step 6: Sort by similarity score (descending)
+            final_results = sorted(deduped.values(), key=lambda x: x['similarity_score'], reverse=True)
+
+            # Step 7: Return aggregated results with metadata
+            return {
+                "success": True,
+                "query": query,
+                "results": final_results,
+                "discovered_tags": sorted(list(all_tags)),
+                "expansion_used": True,
+                "initial_results_count": len(initial_results),
+                "expanded_results_count": len(final_results)
+            }
+
+        except Exception as e:
+            log_error("target_search", e)
+            return {
+                "success": False,
+                "error": str(e),
+                "query": query,
+                "results": [],
+                "discovered_tags": [],
+                "expansion_used": False
+            }
 
     def list_content(self, retention_policy: Optional[str] = None, limit: int = 100) -> Dict[str, Any]:
         """
@@ -307,8 +495,332 @@ class RAGDatabase:
 
     def get_database_stats(self) -> Dict[str, Any]:
         """Get comprehensive database statistics"""
-        from core.utilities.dbstats import get_db_stats_dict
-        return get_db_stats_dict(self.db_path)
+        if self.is_memory_mode and self.db is not None:
+            # Query RAM database directly
+            return self._get_stats_from_ram_db()
+        else:
+            # Query disk database via dbstats module
+            from core.utilities.dbstats import get_db_stats_dict
+            stats = get_db_stats_dict(self.db_path)
+            stats['using_ram_db'] = False
+            return stats
+
+    def _get_stats_from_ram_db(self) -> Dict[str, Any]:
+        """Get stats by querying the in-memory database directly"""
+        try:
+            # Basic counts
+            pages = self.db.execute('SELECT COUNT(*) FROM crawled_content').fetchone()[0]
+
+            # Try to get embeddings count (requires sqlite-vec)
+            vec_available = False
+            try:
+                import sqlite_vec
+                # Check if extension is already loaded by trying a query
+                try:
+                    embeddings = self.db.execute('SELECT COUNT(*) FROM content_vectors').fetchone()[0]
+                    vec_available = True
+                except:
+                    embeddings = None
+            except:
+                embeddings = None
+
+            sessions = self.db.execute('SELECT COUNT(*) FROM sessions').fetchone()[0]
+
+            # Database size (for RAM DB, report the disk size since memory size isn't meaningful)
+            if os.path.exists(self.db_path):
+                size_bytes = os.path.getsize(self.db_path)
+                size_mb = size_bytes / 1024 / 1024
+            else:
+                size_bytes = 0
+                size_mb = 0
+
+            # Retention policy breakdown
+            retention_stats = self.db.execute('''
+                SELECT retention_policy, COUNT(*) as count
+                FROM crawled_content
+                GROUP BY retention_policy
+                ORDER BY count DESC
+            ''').fetchall()
+
+            retention_breakdown = {policy: count for policy, count in retention_stats}
+
+            # Recent activity (last 10 pages)
+            recent = self.db.execute('''
+                SELECT url, title, timestamp,
+                       LENGTH(content) as content_size,
+                       retention_policy
+                FROM crawled_content
+                ORDER BY timestamp DESC
+                LIMIT 10
+            ''').fetchall()
+
+            recent_activity = []
+            for url, title, timestamp, size, policy in recent:
+                recent_activity.append({
+                    "url": url,
+                    "title": title or "No title",
+                    "timestamp": timestamp,
+                    "size_kb": round(size / 1024, 1) if size else 0,
+                    "retention_policy": policy
+                })
+
+            # Storage breakdown
+            content_size = self.db.execute('''
+                SELECT SUM(LENGTH(content) + LENGTH(COALESCE(markdown, '')) + LENGTH(COALESCE(title, '')))
+                FROM crawled_content
+            ''').fetchone()[0] or 0
+
+            if isinstance(embeddings, int):
+                embedding_size = embeddings * 384 * 4  # 384-dim float32
+            else:
+                embedding_size = 0
+
+            content_mb = content_size / 1024 / 1024
+            embedding_mb = embedding_size / 1024 / 1024
+            metadata_mb = max(0, size_mb - content_mb - embedding_mb)
+
+            # Top tags
+            tags_result = self.db.execute('''
+                SELECT tags, COUNT(*) as count
+                FROM crawled_content
+                WHERE tags IS NOT NULL AND tags != ''
+                GROUP BY tags
+                ORDER BY count DESC
+                LIMIT 5
+            ''').fetchall()
+
+            top_tags = [{"tag": tag, "count": count} for tag, count in tags_result]
+
+            return {
+                "success": True,
+                "using_ram_db": True,
+                "database_path": os.path.abspath(self.db_path),
+                "total_pages": pages,
+                "vector_embeddings": embeddings,
+                "sessions": sessions,
+                "database_size_mb": round(size_mb, 2),
+                "database_size_bytes": size_bytes,
+                "retention_breakdown": retention_breakdown,
+                "recent_activity": recent_activity,
+                "storage_breakdown": {
+                    "content_mb": round(content_mb, 2),
+                    "embeddings_mb": round(embedding_mb, 2),
+                    "metadata_mb": round(metadata_mb, 2)
+                },
+                "top_tags": top_tags,
+                "vec_extension_available": vec_available
+            }
+
+        except Exception as e:
+            return {
+                "success": False,
+                "using_ram_db": True,
+                "error": f"Error reading RAM database: {str(e)}"
+            }
+
+    def list_domains(self) -> Dict[str, Any]:
+        """
+        List all unique domains from stored URLs with page counts
+
+        Returns:
+            Dictionary with domains array, total domains, and total pages
+        """
+        try:
+            from urllib.parse import urlparse
+
+            # Get all URLs from database
+            results = self.execute_with_retry('''
+                SELECT url FROM crawled_content
+            ''').fetchall()
+
+            # Extract and count domains
+            domain_counts = {}
+            for row in results:
+                url = row[0]
+                try:
+                    parsed = urlparse(url)
+                    domain = parsed.netloc or parsed.path
+                    # Remove 'www.' prefix if present
+                    if domain.startswith('www.'):
+                        domain = domain[4:]
+
+                    if domain:
+                        domain_counts[domain] = domain_counts.get(domain, 0) + 1
+                except Exception:
+                    # Skip invalid URLs
+                    continue
+
+            # Sort by page count (descending)
+            sorted_domains = [
+                {"domain": domain, "page_count": count}
+                for domain, count in sorted(domain_counts.items(), key=lambda x: x[1], reverse=True)
+            ]
+
+            return {
+                "success": True,
+                "domains": sorted_domains,
+                "total_domains": len(sorted_domains),
+                "total_pages": sum(d["page_count"] for d in sorted_domains)
+            }
+
+        except Exception as e:
+            log_error("list_domains", e)
+            return {
+                "success": False,
+                "error": str(e),
+                "domains": [],
+                "total_domains": 0,
+                "total_pages": 0
+            }
+
+    def is_domain_blocked(self, url: str) -> Dict[str, Any]:
+        """
+        Check if a URL matches any blocked domain patterns.
+        Supports wildcard patterns (*.ru) and keyword matching (*porn*)
+        """
+        try:
+            from urllib.parse import urlparse
+
+            # Parse the URL to get the domain
+            parsed = urlparse(url.lower())
+            domain = parsed.netloc or parsed.path
+            full_url = url.lower()
+
+            # Get all blocked patterns
+            patterns = self.execute_with_retry('SELECT pattern, description FROM blocked_domains').fetchall()
+
+            for pattern, description in patterns:
+                pattern_lower = pattern.lower()
+
+                # Handle wildcard at start: *.ru matches anything ending with .ru
+                if pattern_lower.startswith('*.'):
+                    suffix = pattern_lower[1:]  # Remove the *
+                    if domain.endswith(suffix):
+                        return {
+                            "blocked": True,
+                            "pattern": pattern,
+                            "reason": description or f"Matches pattern: {pattern}",
+                            "url": url
+                        }
+
+                # Handle wildcards on both sides: *porn* matches anywhere in URL
+                elif pattern_lower.startswith('*') and pattern_lower.endswith('*'):
+                    keyword = pattern_lower[1:-1]  # Remove both *
+                    if keyword in full_url or keyword in domain:
+                        return {
+                            "blocked": True,
+                            "pattern": pattern,
+                            "reason": description or f"Matches pattern: {pattern}",
+                            "url": url
+                        }
+
+                # Exact domain match
+                elif pattern_lower == domain:
+                    return {
+                        "blocked": True,
+                        "pattern": pattern,
+                        "reason": description or f"Matches pattern: {pattern}",
+                        "url": url
+                    }
+
+            return {"blocked": False, "url": url}
+
+        except Exception as e:
+            log_error("is_domain_blocked", e, url)
+            # In case of error, allow the URL (fail open)
+            return {"blocked": False, "url": url, "error": str(e)}
+
+    def add_blocked_domain(self, pattern: str, description: str = "") -> Dict[str, Any]:
+        """Add a domain pattern to the blocklist"""
+        try:
+            with self.transaction():
+                self.execute_with_retry(
+                    'INSERT INTO blocked_domains (pattern, description) VALUES (?, ?)',
+                    (pattern, description)
+                )
+
+            return {
+                "success": True,
+                "pattern": pattern,
+                "description": description
+            }
+        except sqlite3.IntegrityError:
+            return {
+                "success": False,
+                "error": f"Pattern '{pattern}' already exists in blocklist"
+            }
+        except Exception as e:
+            log_error("add_blocked_domain", e)
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
+    def remove_blocked_domain(self, pattern: str, keyword: str = "") -> Dict[str, Any]:
+        """Remove a domain pattern from the blocklist (requires authorization keyword)"""
+        try:
+            # Authorization check using environment variable
+            import os
+            REQUIRED_KEYWORD = os.getenv("BLOCKED_DOMAIN_KEYWORD", "")
+            if not REQUIRED_KEYWORD or keyword != REQUIRED_KEYWORD:
+                return {
+                    "success": False,
+                    "error": "Unauthorized"
+                }
+
+            with self.transaction():
+                cursor = self.execute_with_retry(
+                    'DELETE FROM blocked_domains WHERE pattern = ?',
+                    (pattern,)
+                )
+
+                if cursor.rowcount == 0:
+                    return {
+                        "success": False,
+                        "error": f"Pattern '{pattern}' not found in blocklist"
+                    }
+
+                return {
+                    "success": True,
+                    "pattern": pattern,
+                    "removed": True
+                }
+        except Exception as e:
+            log_error("remove_blocked_domain", e)
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
+    def list_blocked_domains(self) -> Dict[str, Any]:
+        """List all blocked domain patterns"""
+        try:
+            results = self.execute_with_retry(
+                'SELECT pattern, description, created_at FROM blocked_domains ORDER BY created_at DESC'
+            ).fetchall()
+
+            blocked_list = [
+                {
+                    "pattern": pattern,
+                    "description": description,
+                    "created_at": created_at
+                }
+                for pattern, description, created_at in results
+            ]
+
+            return {
+                "success": True,
+                "blocked_domains": blocked_list,
+                "count": len(blocked_list)
+            }
+        except Exception as e:
+            log_error("list_blocked_domains", e)
+            return {
+                "success": False,
+                "error": str(e),
+                "blocked_domains": [],
+                "count": 0
+            }
 
     def remove_content(self, url: str = None, session_only: bool = False) -> int:
         try:

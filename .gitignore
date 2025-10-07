@@ -1,13 +1,19 @@
 __pycache__
-notes.txt
-/oldVersions
-.claude
-.crawl4ai_rag.db
-test_reports/
-data/crawl4ai_rag_errors.log
-crawl4ai_rag.db
 .venv
 .coverage
+.claude
+
+# Log files
+*.log
+
+# Text files
+*.txt
+
 **/.env
-data/
+/data/
 backups/
+test_reports/
+tests/claude/
+/oldVersions
+crawl4ai_rag.db
+.crawl4ai_rag.db
