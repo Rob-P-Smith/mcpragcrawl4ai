@@ -178,7 +178,13 @@ class Crawl4AIRAG:
 
             response = requests.post(
                 f"{self.crawl4ai_url}/crawl",
-                json={"urls": [url]},
+                json={
+                    "urls": [url],
+                    "word_count_threshold": 10,  # Minimum words per block
+                    "excluded_tags": ['nav', 'header', 'footer', 'aside', 'script', 'style', 'noscript'],
+                    "remove_forms": True,
+                    "only_text": True
+                },
                 timeout=30
             )
             response.raise_for_status()
@@ -187,7 +193,9 @@ class Crawl4AIRAG:
             if result.get("success") and result.get("results"):
                 crawl_result = result["results"][0]
                 content = crawl_result.get("cleaned_html", "")
-                markdown = crawl_result.get("markdown", {}).get("raw_markdown", "")
+                # Prefer fit_markdown (cleaned) over raw_markdown
+                markdown = crawl_result.get("markdown", {}).get("fit_markdown", "") or \
+                          crawl_result.get("markdown", {}).get("raw_markdown", "")
                 title = crawl_result.get("metadata", {}).get("title", "")
                 status_code = crawl_result.get("metadata", {}).get("status_code", 0)
 
@@ -303,11 +311,19 @@ class Crawl4AIRAG:
         ]
 
         # Adult content word filter - exclude URLs containing these words
+        # Using word boundaries to avoid false positives (e.g., "document" contains "cum")
         ADULT_CONTENT_WORDS = [
             'dick', 'pussy', 'cock', 'tits', 'boobs', 'slut', 'cunt', 'fuck',
             'anal', 'cum', 'throat', 'deepthroat', 'rape', 'incest', 'porn',
             'pron', 'spitroast', 'trans', 'gay', 'bisexual', 'girlongirl',
             'lesbian'
+        ]
+
+        # Safe words that should not be filtered even if they contain adult words
+        SAFE_WORD_EXCEPTIONS = [
+            'document', 'documentation', 'documents', 'documented',
+            'circumstance', 'circumstances', 'accumulate', 'accumulated',
+            'scum', 'vacuum', 'cucumber', 'circumference', 'circumvent'
         ]
 
         internal_links = links.get("internal", [])
@@ -329,10 +345,15 @@ class Crawl4AIRAG:
                 print(f"⊘ Skipping social/unwanted link: {link_url}", file=sys.stderr, flush=True)
                 continue
 
-            # Check for adult content words in URL
-            if any(word in link_lower for word in ADULT_CONTENT_WORDS):
-                print(f"⊘ Skipping adult content link: {link_url}", file=sys.stderr, flush=True)
-                continue
+            # Check for adult content words in URL with smart filtering
+            # First check if URL contains safe exception words
+            has_safe_word = any(safe_word in link_lower for safe_word in SAFE_WORD_EXCEPTIONS)
+
+            if not has_safe_word:
+                # Only check adult words if no safe word exception found
+                if any(word in link_lower for word in ADULT_CONTENT_WORDS):
+                    print(f"⊘ Skipping adult content link: {link_url}", file=sys.stderr, flush=True)
+                    continue
 
             # Domain check
             link_domain = urlparse(link_url).netloc
@@ -408,7 +429,13 @@ class Crawl4AIRAG:
                 try:
                     response = requests.post(
                         f"{self.crawl4ai_url}/crawl",
-                        json={"urls": [current_url]},
+                        json={
+                            "urls": [current_url],
+                            "word_count_threshold": 10,
+                            "excluded_tags": ['nav', 'header', 'footer', 'aside', 'script', 'style', 'noscript'],
+                            "remove_forms": True,
+                            "only_text": True
+                        },
                         timeout=30
                     )
                     response.raise_for_status()
@@ -420,7 +447,9 @@ class Crawl4AIRAG:
 
                     crawl_result = result["results"][0]
                     content = crawl_result.get("cleaned_html", "")
-                    markdown = crawl_result.get("markdown", {}).get("raw_markdown", "")
+                    # Prefer fit_markdown (cleaned) over raw_markdown
+                    markdown = crawl_result.get("markdown", {}).get("fit_markdown", "") or \
+                              crawl_result.get("markdown", {}).get("raw_markdown", "")
                     title = crawl_result.get("metadata", {}).get("title", "")
                     links = crawl_result.get("links", {})
                     status_code = crawl_result.get("metadata", {}).get("status_code", 0)

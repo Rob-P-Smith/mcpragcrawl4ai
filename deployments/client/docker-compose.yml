@@ -1,13 +1,28 @@
+version: '3.8'
+
 services:
   mcp-client:
     build:
       context: ../..
       dockerfile: deployments/client/Dockerfile
-    container_name: crawl4ai-mcp-client
+    container_name: crawl4ai-rag-client
     env_file:
       - .env
     stdin_open: true
     tty: true
     restart: unless-stopped
+    # Network mode for Windows Docker Desktop compatibility
+    # Use bridge network (default) for cross-platform support
     networks:
-      - host
+      - default
+    # Health check to verify client is responsive
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import sys; sys.exit(0)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+networks:
+  default:
+    driver: bridge

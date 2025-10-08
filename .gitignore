@@ -17,3 +17,21 @@ tests/claude/
 /oldVersions
 crawl4ai_rag.db
 .crawl4ai_rag.db
+
+# Docker build outputs and artifacts
+*.tar
+*.tar.gz
+**/blobs/
+**/blobs/**
+crawl4ai-rag-client/
+**/crawl4ai-rag-client/
+deployments/client/crawl4ai-rag-client/
+deployments/client/crawl4ai-rag-client.tar
+oci-layout
+**/oci-layout
+repositories
+**/repositories
+index.json
+**/index.json
+manifest.json
+**/manifest.json

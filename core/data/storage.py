@@ -18,19 +18,25 @@ import asyncio
 from contextlib import contextmanager
 from datetime import datetime
 from typing import List, Dict, Any, Optional
+from langdetect import detect, LangDetectException
 
 from sentence_transformers import SentenceTransformer
 from core.data.sync_manager import DBSyncManager
+from core.data.content_cleaner import ContentCleaner
 
 GLOBAL_MODEL = SentenceTransformer('all-MiniLM-L6-v2')
 
 class RAGDatabase:
     def __init__(self, db_path: str = None):
         if db_path is None:
-            if os.path.exists("/app/data"):
-                db_path = "/app/data/crawl4ai_rag.db"
-            else:
-                db_path = "crawl4ai_rag.db"
+            # Check environment variable first
+            db_path = os.getenv("DB_PATH")
+            if db_path is None:
+                # Fallback to defaults
+                if os.path.exists("/app/data"):
+                    db_path = "/app/data/crawl4ai_rag.db"
+                else:
+                    db_path = "crawl4ai_rag.db"
         self.db_path = db_path
         self.db = None
         self.session_id = str(uuid.uuid4())
@@ -57,8 +63,45 @@ class RAGDatabase:
         Only needed when USE_MEMORY_DB=true
         """
         if self.sync_manager and self.db is None:
+            # First, ensure disk DB has tables (create if needed)
+            temp_conn = sqlite3.connect(self.db_path, check_same_thread=False)
+            self.load_sqlite_vec(temp_conn)
+            # Create tables in disk DB if they don't exist
+            temp_conn.executescript('''
+                CREATE TABLE IF NOT EXISTS crawled_content (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    url TEXT UNIQUE NOT NULL,
+                    title TEXT,
+                    content TEXT,
+                    markdown TEXT,
+                    content_hash TEXT,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    added_by_session TEXT,
+                    retention_policy TEXT DEFAULT 'permanent',
+                    tags TEXT,
+                    metadata TEXT
+                );
+
+                CREATE TABLE IF NOT EXISTS sessions (
+                    session_id TEXT PRIMARY KEY,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    last_active DATETIME DEFAULT CURRENT_TIMESTAMP
+                );
+
+                CREATE TABLE IF NOT EXISTS blocked_domains (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    pattern TEXT UNIQUE NOT NULL,
+                    description TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                );
+            ''')
+            temp_conn.commit()
+            temp_conn.close()
+
+            # Now load into memory with sync manager
             self.db = await self.sync_manager.initialize()
-            self.init_database()  # Create tables if needed in memory
+            # Complete initialization (vectors, session, blocked domains)
+            self.init_database()
             print("✅ RAM Database initialized and ready")
         elif not self.is_memory_mode and self.db is None:
             # Fallback for disk mode
@@ -137,8 +180,10 @@ class RAGDatabase:
     def init_database(self):
         try:
             with self.db_lock:
-                self.db = sqlite3.connect(self.db_path, check_same_thread=False)
-                self.load_sqlite_vec(self.db)
+                # Only create new connection if not already set by sync_manager
+                if self.db is None:
+                    self.db = sqlite3.connect(self.db_path, check_same_thread=False)
+                    self.load_sqlite_vec(self.db)
 
                 self.db.executescript('''
                     CREATE TABLE IF NOT EXISTS crawled_content (
@@ -212,8 +257,48 @@ class RAGDatabase:
                      metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         try:
             import json
-            content_hash = hashlib.sha256(content.encode()).hexdigest()
-            metadata_json = json.dumps(metadata) if metadata else None
+
+            # Clean content FIRST before storing
+            cleaned_result = ContentCleaner.clean_and_validate(content, markdown, url)
+            cleaned_content = cleaned_result["cleaned_content"]
+
+            # Warn if content is mostly navigation
+            if cleaned_result.get("quality_warning"):
+                print(f"⚠️  {cleaned_result['quality_warning']}: {url}", file=sys.stderr, flush=True)
+                print(f"   Reduced from {cleaned_result['original_lines']} to {cleaned_result['cleaned_lines']} lines",
+                      file=sys.stderr, flush=True)
+
+            # Detect language - skip if not English
+            try:
+                detected_lang = detect(cleaned_content[:1000])  # Use first 1000 chars for detection
+                if detected_lang != 'en':
+                    print(f"⊘ Skipping non-English content ({detected_lang}): {url}", file=sys.stderr, flush=True)
+                    return {
+                        "success": False,
+                        "error": f"Non-English content detected: {detected_lang}",
+                        "url": url,
+                        "skipped": True
+                    }
+            except LangDetectException:
+                # If language detection fails, log warning but continue
+                print(f"⚠️  Language detection failed for: {url}", file=sys.stderr, flush=True)
+
+            # Add cleaning statistics to metadata
+            if metadata is None:
+                metadata = {}
+
+            metadata.update({
+                "original_size_bytes": len(markdown) if markdown else len(content),
+                "cleaned_size_bytes": len(cleaned_content),
+                "reduction_ratio": cleaned_result["reduction_ratio"],
+                "navigation_indicators": cleaned_result["navigation_indicators"],
+                "language": detected_lang if 'detected_lang' in locals() else 'unknown',
+                "cleaned_at": datetime.now().isoformat()
+            })
+
+            # Hash the cleaned content (not original)
+            content_hash = hashlib.sha256(cleaned_content.encode()).hexdigest()
+            metadata_json = json.dumps(metadata)
 
             with self.transaction():
                 existing = self.execute_with_retry(
@@ -227,16 +312,17 @@ class RAGDatabase:
                     )
                     print(f"Replacing existing content for URL: {url}", file=sys.stderr, flush=True)
 
+                # Store CLEANED content in both content and markdown fields
                 cursor = self.execute_with_retry('''
                     INSERT OR REPLACE INTO crawled_content
                     (url, title, content, markdown, content_hash, added_by_session, retention_policy, tags, metadata)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (url, title, content, markdown, content_hash, self.session_id, retention_policy, tags, metadata_json))
+                ''', (url, title, cleaned_content, cleaned_content, content_hash, self.session_id, retention_policy, tags, metadata_json))
 
                 content_id = cursor.lastrowid
-                # Use markdown for embeddings with fallback to content
-                embedding_text = markdown if markdown else content
-                self.generate_embeddings(content_id, embedding_text)
+
+                # Generate embeddings from the same cleaned content
+                self.generate_embeddings(content_id, cleaned_content)
 
                 # Track write for sync (non-blocking)
                 # Note: content_vectors tracked separately in generate_embeddings()
@@ -264,7 +350,19 @@ class RAGDatabase:
     def generate_embeddings(self, content_id: int, content: str):
         try:
             chunks = self.chunk_content(content)
-            embeddings = self.embedder.encode(chunks)
+
+            # Filter out navigation chunks before embedding
+            filtered_chunks = ContentCleaner.filter_chunks(chunks)
+
+            if len(filtered_chunks) == 0:
+                print(f"⚠️  No quality chunks after filtering for content_id {content_id}", file=sys.stderr, flush=True)
+                # Use original chunks if filtering removes everything
+                filtered_chunks = chunks[:3] if len(chunks) > 0 else chunks
+
+            if len(filtered_chunks) < len(chunks):
+                print(f"   Filtered {len(chunks)} chunks → {len(filtered_chunks)} quality chunks", file=sys.stderr, flush=True)
+
+            embeddings = self.embedder.encode(filtered_chunks)
 
             embedding_data = [
                 (embedding.astype(np.float32).tobytes(), content_id)
@@ -338,8 +436,9 @@ class RAGDatabase:
             for row in results:
                 url = row[0]
                 distance = row[6]
-                # Use markdown with fallback to content
+                # Content is already cleaned during storage - use as-is
                 content_text = row[2] if row[2] else row[3]
+
                 if url not in seen_urls or distance < seen_urls[url]['distance']:
                     seen_urls[url] = {
                         'url': row[0],
@@ -591,6 +690,11 @@ class RAGDatabase:
 
             top_tags = [{"tag": tag, "count": count} for tag, count in tags_result]
 
+            # Add sync metrics if available
+            sync_metrics = {}
+            if self.sync_manager:
+                sync_metrics = self.sync_manager.get_metrics()
+
             return {
                 "success": True,
                 "using_ram_db": True,
@@ -608,7 +712,8 @@ class RAGDatabase:
                     "metadata_mb": round(metadata_mb, 2)
                 },
                 "top_tags": top_tags,
-                "vec_extension_available": vec_available
+                "vec_extension_available": vec_available,
+                "sync_metrics": sync_metrics
             }
 
         except Exception as e:

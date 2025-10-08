@@ -11,26 +11,35 @@ This is a Crawl4AI RAG (Retrieval-Augmented Generation) MCP Server implementatio
 - **MCPServer**: Main server handling JSON-RPC 2.0 protocol for MCP communication
 - **Crawl4AIRAG**: Web crawling interface that communicates with a local Crawl4AI service
 - **RAGDatabase**: SQLite-based vector database using sqlite-vec extension for semantic search
+- **Content Cleaner**: Navigation removal, boilerplate filtering, and chunk quality validation
+- **Language Filter**: Automatic detection and filtering of non-English content using langdetect
 - **RAM Database Mode**: In-memory SQLite database with differential sync for 10-50x faster queries
+  - **Virtual Table Support**: Special handling for vec0 virtual tables with hard-coded schemas
+  - **Dual Sync Strategy**: Idle sync (5s) + periodic sync (5min) for reliability
+  - **Change Tracking**: Trigger-based tracking for regular tables, manual tracking for virtual tables
 - **Error Logging**: Comprehensive error logging system writing to `crawl4ai_rag_errors.log`
 - **API Gateway**: REST API layer with authentication and bidirectional communication support
 - **Security Layer**: Input sanitization and SQL injection defense system (dbdefense.py)
+- **Recrawl Utility**: Batch URL recrawling with concurrent processing and API-based execution
 
 ### Dependencies
 - **External Service**: Requires Crawl4AI service running on `http://localhost:11235`
 - **Vector Database**: Uses sqlite-vec extension for vector similarity search
 - **ML Model**: Pre-loads SentenceTransformer 'all-MiniLM-L6-v2' for embeddings
-- **Key Libraries**: sqlite3, sqlite_vec, sentence_transformers, numpy, requests, fastapi, uvicorn
+- **Language Detection**: langdetect library for identifying and filtering non-English content
+- **Key Libraries**: sqlite3, sqlite_vec, sentence_transformers, numpy, requests, fastapi, uvicorn, aiohttp, langdetect
 
 ### File Structure
 - **core/rag_processor.py**: Main MCP server implementation and JSON-RPC handling
-- **core/operations/crawler.py**: Web crawling logic and deep crawling functionality
-- **core/data/storage.py**: Database operations, content storage, and vector embeddings
+- **core/operations/crawler.py**: Web crawling logic with fit_markdown extraction and deep crawling functionality
+- **core/data/storage.py**: Database operations, content storage, vector embeddings, and language filtering
+- **core/data/content_cleaner.py**: Navigation removal, boilerplate filtering, and content quality validation
 - **core/data/sync_manager.py**: RAM database synchronization manager with differential sync
 - **core/data/dbdefense.py**: Security layer for input sanitization and SQL injection prevention
 - **core/utilities/**: Helper scripts for testing and batch operations
   - **core/utilities/dbstats.py**: Database statistics and health monitoring
   - **core/utilities/batch_crawler.py**: Batch crawling with retry logic and progress tracking
+  - **core/utilities/recrawl_utility.py**: Concurrent URL recrawling via API with rate limiting
 - **api/**: REST API module for bidirectional communication
   - **api/api.py**: FastAPI server with all REST endpoints
   - **api/auth.py**: Authentication middleware and session management
@@ -42,8 +51,13 @@ This is a Crawl4AI RAG (Retrieval-Augmented Generation) MCP Server implementatio
 - **crawled_content**: Stores web content with metadata, retention policies, and session tracking
 - **sessions**: Tracks user sessions for temporary content management
 - **content_vectors**: Virtual table for vector embeddings using vec0 engine
+  - Schema: `['rowid', 'embedding', 'content_id']` (rowid is implicit in vec0 tables)
+  - Primary key: `content_id` (not `id` like regular tables)
+  - Special handling required in sync operations due to virtual table limitations
 - **blocked_domains**: Stores blocked domain patterns with wildcard support
 - **_sync_tracker**: Shadow table for tracking RAM database changes (RAM mode only)
+  - Tracks table_name, record_id, operation (INSERT/UPDATE/DELETE), timestamp
+  - Cleared after successful sync to disk
 
 ## Available Tools
 
@@ -149,11 +163,18 @@ The server expects JSON-RPC 2.0 requests via stdin and responds via stdout. Erro
 
 ## Data Persistence
 - **Database**: SQLite file `crawl4ai_rag.db` in the working directory
+- **Content Processing Pipeline**:
+  1. Crawl4AI extracts content using fit_markdown (cleaner than raw_markdown)
+  2. Content cleaner removes navigation, boilerplate, and low-quality content
+  3. Language detection filters out non-English content
+  4. Chunks are filtered to remove navigation-heavy segments
+  5. Only quality content is stored and embedded
 - **Content Chunking**: Text split into 500-word chunks with 50-word overlap
+- **Storage Optimization**: 70-80% reduction in storage through intelligent cleaning
 - **Retention Policies**: 'permanent', 'session_only', or time-based (e.g., '30_days')
 - **Deep Crawl Tags**: Automatically tagged with 'deep_crawl' and depth information
 - **Vector Embeddings**: 384-dimensional vectors using all-MiniLM-L6-v2 model
-- **Markdown Storage**: HTML content converted to markdown for better semantic search
+- **Markdown Storage**: fit_markdown format for better semantic search quality
 
 ## Environment Configuration
 
@@ -263,17 +284,26 @@ The system supports running the entire SQLite database in memory for significant
 - **Automatic Tracking**: Regular tables use SQLite triggers for automatic change detection
 - **Manual Tracking**: Virtual tables (like `content_vectors`) use manual tracking since they don't support triggers
 
+### Virtual Table Support
+The sync manager includes special handling for sqlite-vec virtual tables:
+- **Schema Registry**: Hard-coded schemas for virtual tables (PRAGMA table_info returns empty)
+- **Primary Key Handling**: Uses `content_id` for content_vectors instead of `id`
+- **Column Detection**: Includes implicit `rowid` column in vec0 virtual tables
+- **Validation**: Checks for empty column lists to prevent sync failures
+
 ### Configuration
 Set `USE_MEMORY_DB=true` in `.env` to enable RAM database mode. The system will:
 - Load the entire database into `:memory:` on startup
 - Track all changes via triggers and shadow table
-- Sync changes to disk automatically
+- Sync changes to disk automatically (idle + periodic)
 - Query stats show `using_ram_db: true` when active
+- Sync metrics available in `/api/v1/stats` response
 
 ### Monitoring
-- **Endpoint**: `/api/v1/db/stats` provides sync metrics, health status, and pending changes
-- **Metrics**: Track total syncs, sync duration, failed syncs, and records synced
+- **Endpoint**: `/api/v1/stats` includes `sync_metrics` with full sync health data
+- **Metrics**: Track total syncs, sync duration, failed syncs, records synced, and pending changes
 - **Health**: Monitor pending changes, time since last sync, and sync success rate
+- **Logs**: Check Docker logs for sync messages: `✅ Synced N changes to disk in Xs`
 
 ## Security Features
 
@@ -292,6 +322,8 @@ All user inputs are sanitized before database operations:
 - **Custom Blocklist**: User-defined domain patterns with wildcard support
 
 ## Batch Crawling
+
+### Legacy Batch Crawler (batch_crawler.py)
 The system includes a batch crawler utility with advanced features:
 - **Progress Tracking**: Real-time progress bars and statistics
 - **Retry Logic**: Automatic retry of failed URLs with configurable attempts
@@ -299,3 +331,28 @@ The system includes a batch crawler utility with advanced features:
 - **Error Logging**: Detailed error tracking with failed URL collection
 - **Resume Support**: Can restart from failed URLs only
 - **Rate Limiting**: Respects server rate limits and backoff strategies
+
+### Recrawl Utility (recrawl_utility.py)
+Modern utility for recrawling existing URLs with improved architecture:
+- **API-Based**: Uses REST API instead of direct database access to avoid sync conflicts
+- **Concurrent Processing**: Async processing with semaphore-based rate limiting
+- **Direct DB Read**: Reads URLs from disk database, sends crawl requests to API
+- **Rate Limiting**: Configurable delay and concurrency (e.g., 10 concurrent, 60 req/min)
+- **Dry-Run Mode**: Preview what will be recrawled before executing
+- **Progress Tracking**: Real-time progress with success/failure statistics
+- **Filter Support**: Filter by retention policy, tags, or URL patterns
+
+#### Usage Examples
+```bash
+# Dry run to preview recrawl
+python3 core/utilities/recrawl_utility.py --all --dry-run
+
+# Recrawl all URLs with 10 concurrent requests, 0.6s delay (60 req/min)
+python3 core/utilities/recrawl_utility.py --all --concurrent 10 --delay 0.6
+
+# Recrawl specific retention policy
+python3 core/utilities/recrawl_utility.py --policy permanent --concurrent 5 --delay 1.0
+
+# Recrawl URLs with specific tags
+python3 core/utilities/recrawl_utility.py --tags "react,documentation" --limit 100
+```

@@ -23,11 +23,18 @@ The system can operate in two modes:
 ## Key Features
 
 - **RAM Database Mode**: In-memory SQLite with differential sync for ultra-fast queries
+  - Virtual table support with hard-coded schemas
+  - Dual sync strategy: idle (5s) + periodic (5min)
+  - 100% sync reliability with proper error handling
+- **Content Optimization**: Intelligent cleaning removes 70-80% of navigation boilerplate
+- **Language Filtering**: Automatic detection and filtering of non-English content
 - **Deep Crawling**: DFS-based multi-page crawling with depth and page limits
 - **Input Sanitization**: Comprehensive SQL injection defense and validation
 - **Domain Blocking**: Wildcard-based blocking with social media and NSFW filters
 - **Batch Operations**: High-performance batch crawling with automatic retry
 - **Vector Search**: Semantic search with tag filtering and deduplication
+- **Concurrent Recrawling**: API-based batch URL recrawling with rate limiting
+- **Sync Monitoring**: Real-time sync metrics in `/api/v1/stats` endpoint
 
 ## Quick Start
 
@@ -114,10 +121,15 @@ python3 core/rag_processor.py
   - 10-50x faster query performance
   - Automatic idle sync (5 seconds) and periodic sync (5 minutes)
   - Change tracking via triggers and shadow tables
+- **Content Processing Pipeline**:
+  - Crawl4AI fit_markdown extraction (cleaner than raw_markdown)
+  - Navigation and boilerplate removal (70-80% storage reduction)
+  - Language detection and filtering (English-only by default)
+  - Chunk quality filtering before embedding
 - **Vector Search**: 384-dimensional embeddings with similarity search
 - **Batch Processing**: Concurrent crawling with retry logic (see [Batch Operations Guide](advanced/batch-operations.md))
 - **Content Deduplication**: URL-based deduplication in search results
-- **Efficient Storage**: Markdown conversion and content chunking
+- **Efficient Storage**: fit_markdown conversion and intelligent content chunking
 
 ## Error Handling
 

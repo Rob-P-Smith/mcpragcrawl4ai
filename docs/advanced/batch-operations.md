@@ -2,7 +2,10 @@
 
 ## Overview
 
-The Crawl4AI RAG MCP Server provides powerful batch crawling capabilities for efficiently processing large numbers of URLs. The batch crawler supports concurrent processing, retry logic, progress tracking, and comprehensive error reporting.
+The Crawl4AI RAG MCP Server provides powerful batch crawling capabilities for efficiently processing large numbers of URLs. The system includes two utilities:
+
+1. **Batch Crawler** (legacy) - Direct batch crawling from URL files
+2. **Recrawl Utility** (modern) - API-based recrawling of existing database URLs with improved architecture
 
 ## Batch Crawler
 
@@ -631,9 +634,341 @@ python3 core/utilities/dbstats.py
 - **REST API**: `/home/robiloo/Documents/mcpragcrawl4ai/api/api.py`
 - **Storage Layer**: `/home/robiloo/Documents/mcpragcrawl4ai/core/data/storage.py`
 
+## Recrawl Utility
+
+### Overview
+
+The Recrawl Utility is a modern tool for batch recrawling existing URLs in the database. Unlike the batch crawler which processes URLs from files, this utility:
+
+- Reads URLs directly from the database
+- Sends crawl requests via API (avoiding sync conflicts)
+- Supports concurrent processing with rate limiting
+- Provides dry-run mode for previewing operations
+- Filters by retention policy, tags, or URL patterns
+
+### Location
+
+`/home/robiloo/Documents/mcpragcrawl4ai/core/utilities/recrawl_utility.py`
+
+### Key Features
+
+- **API-Based Execution**: Uses `/api/v1/crawl/store` instead of direct database access
+- **Concurrent Processing**: Asyncio-based with semaphore rate limiting
+- **Database Read**: Reads URLs from disk database (no RAM DB conflicts)
+- **Flexible Filtering**: Filter by retention policy, tags, or limit
+- **Rate Limiting**: Configurable delay and concurrency
+- **Dry-Run Mode**: Preview what will be recrawled before executing
+- **Progress Tracking**: Real-time statistics with success/failure counts
+
+### Architecture
+
+```
+┌─────────────────────────────────────────┐
+│     Disk Database (Direct Read)         │
+│   - Reads URLs from crawled_content     │
+│   - No RAM DB initialization            │
+│   - No sync manager conflicts           │
+└──────────────┬──────────────────────────┘
+               │
+               ▼
+┌─────────────────────────────────────────┐
+│      RecrawlUtility Class               │
+│                                         │
+│  ┌───────────────────────────────────┐  │
+│  │  get_urls_to_recrawl()            │  │
+│  │  - Query disk DB directly         │  │
+│  │  - Filter by policy/tags          │  │
+│  │  - Return URL list                │  │
+│  └───────────────────────────────────┘  │
+│                                         │
+│  ┌───────────────────────────────────┐  │
+│  │  recrawl_batch()                  │  │
+│  │  - Concurrent processing          │  │
+│  │  - Semaphore rate limiting        │  │
+│  │  - Progress tracking              │  │
+│  └───────────────────────────────────┘  │
+│                                         │
+│  ┌───────────────────────────────────┐  │
+│  │  recrawl_url()                    │  │
+│  │  - POST to /api/v1/crawl/store    │  │
+│  │  - aiohttp async requests         │  │
+│  │  - Error handling & retry         │  │
+│  └───────────────────────────────────┘  │
+└──────────────┬──────────────────────────┘
+               │
+               ▼
+┌─────────────────────────────────────────┐
+│      REST API Server (Docker)           │
+│   POST /api/v1/crawl/store              │
+│   - Crawl URL via Crawl4AI              │
+│   - Clean content (remove navigation)   │
+│   - Filter language (English only)      │
+│   - Store in RAM DB                     │
+│   - Generate embeddings                 │
+│   - Sync to disk automatically          │
+└─────────────────────────────────────────┘
+```
+
+### Usage
+
+#### Basic Usage
+
+```bash
+# Activate virtual environment
+cd ~/Documents/mcpragcrawl4ai && source .venv/bin/activate
+
+# Dry run to preview all URLs
+python3 core/utilities/recrawl_utility.py --all --dry-run
+
+# Recrawl all URLs with default settings (1 concurrent, 1s delay)
+python3 core/utilities/recrawl_utility.py --all
+
+# Recrawl with 10 concurrent requests, 0.6s delay (60 req/min)
+python3 core/utilities/recrawl_utility.py --all --concurrent 10 --delay 0.6
+
+# Recrawl specific retention policy
+python3 core/utilities/recrawl_utility.py --policy permanent --concurrent 5 --delay 1.0
+
+# Recrawl URLs with specific tags
+python3 core/utilities/recrawl_utility.py --tags "react,documentation" --limit 100 --concurrent 10 --delay 0.5
+
+# Recrawl single URL
+python3 core/utilities/recrawl_utility.py --url https://example.com
+```
+
+#### Command-Line Options
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--url URL` | Recrawl a single URL | None |
+| `--all` | Recrawl all URLs in database | False |
+| `--policy POLICY` | Filter by retention policy | None |
+| `--tags TAGS` | Filter by tags (comma-separated) | None |
+| `--limit N` | Maximum URLs to recrawl | None |
+| `--delay SECONDS` | Delay between requests | 1.0 |
+| `--concurrent N` | Number of concurrent requests | 1 |
+| `--dry-run` | Preview without making changes | False |
+
+### Rate Limiting Examples
+
+```bash
+# 30 requests per minute (2s delay, 1 concurrent)
+python3 core/utilities/recrawl_utility.py --all --concurrent 1 --delay 2.0
+
+# 60 requests per minute (0.6s delay, 10 concurrent)
+python3 core/utilities/recrawl_utility.py --all --concurrent 10 --delay 0.6
+
+# 120 requests per minute (0.5s delay, 10 concurrent)
+python3 core/utilities/recrawl_utility.py --all --concurrent 10 --delay 0.5
+
+# Conservative (avoid rate limits)
+python3 core/utilities/recrawl_utility.py --all --concurrent 5 --delay 1.0
+```
+
+### Example Output
+
+```
+✅ Loaded environment from /home/user/mcpragcrawl4ai/deployments/server/.env
+✅ Adjusted DB_PATH to: ./data/crawl4ai_rag.db
+✅ Recrawl utility initialized
+   Database: ./data/crawl4ai_rag.db
+   API: http://localhost:8080
+Fetching URLs from database...
+Found 2295 URLs to recrawl
+
+Recrawl 2295 URLs? This will replace content and embeddings. (y/N): y
+
+================================================================================
+Recrawl Batch - 2295 URLs
+Concurrency: 10 simultaneous requests
+Rate limit: 0.6s delay between requests
+================================================================================
+
+[1/2295] 🔄 Recrawling: https://react.dev/blog/2025/02/14/sunsetting-create-react-app
+✅ Updated: Sunsetting Create React App – React
+
+[2/2295] 🔄 Recrawling: https://react.dev/reference/react/hooks
+✅ Updated: Hooks – React
+
+[3/2295] 🔄 Recrawling: https://tanstack.com/query/latest/docs/framework/react/overview
+❌ Failed: https://tanstack.com/query/latest/docs/framework/react/overview - HTTP 429
+
+...
+
+================================================================================
+Recrawl Statistics
+================================================================================
+Total URLs: 2295
+✅ Success: 2250
+❌ Failed: 45
+⊘ Skipped: 0
+
+Errors (10):
+  • https://example.com/page1
+    HTTP 429: Too Many Requests
+  • https://example.com/page2
+    Non-English content detected: ru
+  ...
+
+Success Rate: 98.0%
+================================================================================
+```
+
+### Content Processing Pipeline
+
+When recrawling, each URL goes through:
+
+1. **API Request**: POST to `/api/v1/crawl/store`
+2. **Crawl4AI Extraction**: Uses `fit_markdown` for cleaner content
+3. **Content Cleaning**: Removes navigation, boilerplate (70-80% reduction)
+4. **Language Detection**: Filters out non-English content
+5. **Database Storage**: Replaces old content and embeddings
+6. **RAM DB Sync**: Automatically syncs to disk (if RAM mode enabled)
+
+### Filtering Options
+
+#### By Retention Policy
+
+```bash
+# Recrawl only permanent content
+python3 core/utilities/recrawl_utility.py --policy permanent
+
+# Recrawl only session content
+python3 core/utilities/recrawl_utility.py --policy session_only
+```
+
+#### By Tags
+
+```bash
+# Recrawl React documentation
+python3 core/utilities/recrawl_utility.py --tags react
+
+# Recrawl multiple tags
+python3 core/utilities/recrawl_utility.py --tags "react,documentation,tutorial"
+```
+
+#### By Limit
+
+```bash
+# Recrawl first 100 URLs
+python3 core/utilities/recrawl_utility.py --all --limit 100
+
+# Test with 10 URLs first
+python3 core/utilities/recrawl_utility.py --all --limit 10 --dry-run
+```
+
+### Error Handling
+
+#### Common Error Types
+
+1. **HTTP 429 (Too Many Requests)**: Target server rate limiting
+   - Solution: Reduce concurrency or increase delay
+
+2. **Non-English Content**: Language detection rejected content
+   - This is expected behavior, not an error
+
+3. **Connection Timeout**: Request exceeded 60s
+   - Solution: Server may be overloaded, reduce concurrency
+
+4. **HTTP 404/410**: URL no longer exists
+   - Solution: Consider removing from database
+
+### Performance Tuning
+
+#### Concurrency Recommendations
+
+| URLs to Recrawl | Recommended Concurrency | Delay |
+|-----------------|------------------------|-------|
+| < 100 | 1-5 | 1.0s |
+| 100-500 | 5-10 | 0.6-1.0s |
+| 500-2000 | 10-15 | 0.5-0.6s |
+| 2000+ | 10-20 | 0.5-0.6s |
+
+**Note**: Higher concurrency with lower delay may trigger rate limits on target servers.
+
+### Best Practices
+
+1. **Always Dry-Run First**: Preview what will be recrawled
+   ```bash
+   python3 core/utilities/recrawl_utility.py --all --dry-run
+   ```
+
+2. **Start Conservative**: Begin with low concurrency and increase if needed
+   ```bash
+   python3 core/utilities/recrawl_utility.py --all --concurrent 5 --delay 1.0
+   ```
+
+3. **Monitor Progress**: Watch for rate limit errors (HTTP 429)
+
+4. **Filter Before Recrawling**: Use tags/policies to recrawl specific content
+   ```bash
+   python3 core/utilities/recrawl_utility.py --tags documentation --limit 500
+   ```
+
+5. **Check Database Stats**: Verify recrawl success
+   ```bash
+   python3 core/utilities/dbstats.py
+   ```
+
+6. **Docker Must Be Running**: API server must be accessible
+   ```bash
+   docker compose -f deployments/server/docker-compose.yml ps
+   ```
+
+### Advantages Over Batch Crawler
+
+| Feature | Recrawl Utility | Batch Crawler |
+|---------|----------------|---------------|
+| Source | Database URLs | File URLs |
+| Execution | API-based | Direct DB access |
+| Sync Conflicts | None | Potential |
+| Filtering | Policy/Tags | None |
+| Dry-Run | Yes | No |
+| Content Processing | Full pipeline | Full pipeline |
+| Rate Limiting | Built-in | Manual |
+| Use Case | Update existing | Import new |
+
+### Troubleshooting
+
+#### Issue: "no such module: vec0"
+
+**Cause**: Trying to use RAM DB in recrawl utility (old version)
+
+**Solution**: Use latest version that queries disk DB directly and sends to API
+
+#### Issue: High failure rate
+
+**Symptoms**: Many HTTP 429 or timeout errors
+
+**Solutions:**
+- Reduce concurrency: `--concurrent 5`
+- Increase delay: `--delay 1.5`
+- Check API server is running
+- Monitor server logs for issues
+
+#### Issue: Non-English content rejected
+
+**Symptoms**: Many "Non-English content detected" errors
+
+**This is expected**: Language filtering is working as designed. These URLs contained non-English content and were intentionally skipped.
+
+### Monitoring
+
+```bash
+# Watch recrawl progress in one terminal
+python3 core/utilities/recrawl_utility.py --all --concurrent 10 --delay 0.6
+
+# Monitor API server in another terminal
+docker logs -f crawl4ai-rag-server
+
+# Check database stats after completion
+python3 core/utilities/dbstats.py
+```
+
 ## See Also
 
 - [Database Statistics](../guides/troubleshooting.md#database-issues)
 - [API Endpoints](../api/endpoints.md)
 - [Performance Optimization](../guides/deployment.md#performance-considerations)
 - [RAM Database Mode](ram-database.md)
+- [Content Cleaning Pipeline](../guides/content-processing.md)

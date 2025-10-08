@@ -65,27 +65,31 @@ See [Deployment Guide](docs/deployments.md) for complete deployment options.
 
 ### Core Components
 - **MCP Server** (core/rag_processor.py) - JSON-RPC 2.0 protocol handler
-- **RAG Database** (core/data/storage.py) - SQLite + sqlite-vec vector storage
-- **Sync Manager** (core/data/sync_manager.py) - RAM database differential sync
-- **Crawler** (core/operations/crawler.py) - Web crawling with DFS algorithm
+- **RAG Database** (core/data/storage.py) - SQLite + sqlite-vec vector storage with RAM mode support
+- **Content Cleaner** (core/data/content_cleaner.py) - Navigation removal and quality filtering
+- **Sync Manager** (core/data/sync_manager.py) - RAM database differential sync with virtual table support
+- **Crawler** (core/operations/crawler.py) - Web crawling with DFS algorithm and content extraction
 - **Defense Layer** (core/data/dbdefense.py) - Input sanitization and security
 - **REST API** (api/api.py) - FastAPI server with 15+ endpoints
 - **Auth System** (api/auth.py) - API key authentication and rate limiting
+- **Recrawl Utility** (core/utilities/recrawl_utility.py) - Batch URL recrawling via API with concurrent processing
 
 ### Database Schema
 - **crawled_content** - Web content with markdown, embeddings, and metadata
-- **content_vectors** - Vector embeddings (sqlite-vec virtual table)
+- **content_vectors** - Vector embeddings (sqlite-vec vec0 virtual table with rowid support)
 - **sessions** - User session tracking for temporary content
 - **blocked_domains** - Domain blocklist with wildcard patterns
-- **_sync_tracker** - Change tracking for RAM database sync (memory mode only)
+- **_sync_tracker** - Change tracking for RAM database differential sync (memory mode only)
 
 ### Technology Stack
 - **Python 3.11+** with asyncio for concurrent operations
 - **SQLite** with sqlite-vec extension for vector similarity search
 - **SentenceTransformers** (all-MiniLM-L6-v2) for embedding generation
+- **langdetect** for language detection and filtering
 - **FastAPI** for REST API with automatic OpenAPI documentation
-- **Crawl4AI** for intelligent web content extraction
+- **Crawl4AI** for intelligent web content extraction with fit_markdown
 - **Docker** for containerized deployment
+- **aiohttp** for async HTTP requests in utilities
 
 ## Documentation
 
@@ -103,13 +107,17 @@ For detailed documentation, see:
 - **RAM Database Mode**: In-memory SQLite with differential sync for 10-50x faster queries
 - **Vector Search**: 384-dimensional embeddings using all-MiniLM-L6-v2 for semantic search
 - **Batch Crawling**: High-performance batch processing with retry logic and progress tracking
-- **Efficient Storage**: Markdown conversion and content chunking for optimal retrieval
+- **Content Optimization**: 70-80% storage reduction through intelligent cleaning and filtering
+- **Efficient Storage**: fit_markdown conversion and content chunking for optimal retrieval
 
 ### Functionality
 - **Deep Crawling**: DFS-based multi-page crawling with depth and page limits
+- **Content Cleaning**: Automatic removal of navigation, boilerplate, and low-quality content
+- **Language Filtering**: Automatic detection and filtering of non-English content
 - **Semantic Search**: Vector similarity search with tag filtering and deduplication
 - **Target Search**: Intelligent search with automatic tag expansion
 - **Content Management**: Full CRUD operations with retention policies and session management
+- **Batch Recrawling**: Concurrent URL recrawling via API with rate limiting and progress tracking
 
 ### Security
 - **Input Sanitization**: Comprehensive SQL injection defense and input validation
@@ -167,6 +175,8 @@ stats = await client.get_database_stats()
 With RAM database mode enabled:
 - **Search queries**: 20-50ms (vs 200-500ms disk mode)
 - **Batch crawling**: 2,000+ URLs successfully processed
-- **Database size**: 205MB (2,018 pages, 9,743 embeddings)
-- **Sync overhead**: <100ms for differential sync
+- **Database size**: 215MB (2,296 pages, 8,196 embeddings)
+- **Sync overhead**: <100ms for differential sync (idle: 5s, periodic: 5min)
+- **Sync reliability**: 100% success rate with virtual table support
 - **Memory usage**: ~500MB for full in-memory database
+- **Storage optimization**: 70-80% reduction through content cleaning

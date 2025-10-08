@@ -277,6 +277,66 @@ docker exec crawl4ai-rag-server ps aux | grep python
 docker exec crawl4ai-rag-server py-spy dump --pid 1
 ```
 
+#### 6. "no such column: id" Sync Errors (FIXED)
+
+**Symptoms**:
+- `❌ Sync failed: no such column: id` in logs
+- All syncs failing with 100% failure rate
+- Large pending_changes count that never decreases
+- Vector embeddings not persisting to disk
+
+**Root Cause**:
+This was a bug in the sync manager where `PRAGMA table_info(content_vectors)` returned empty for vec0 virtual tables, causing the sync to use an empty column list and fail.
+
+**Fix Applied** (v1.2.0+):
+The sync manager now includes special handling for virtual tables:
+- Hard-coded schema registry for `content_vectors` table
+- Correct column detection: `['rowid', 'embedding', 'content_id']`
+- Uses `content_id` as primary key instead of `id`
+- Validates column lists to prevent empty schemas
+
+**If you're still experiencing this issue:**
+1. **Update to latest version**:
+```bash
+cd mcpragcrawl4ai
+git pull origin master
+docker compose -f deployments/server/docker-compose.yml down
+docker compose -f deployments/server/docker-compose.yml build
+docker compose -f deployments/server/docker-compose.yml up -d
+```
+
+2. **Verify fix is applied**:
+```bash
+# Check logs for virtual table schema messages
+docker exec crawl4ai-rag-server tail -50 /var/log/supervisor/api-server.out.log | grep "hard-coded schema"
+
+# Should see: "Using hard-coded schema for virtual table 'content_vectors': ['rowid', 'embedding', 'content_id']"
+```
+
+3. **Confirm sync is working**:
+```bash
+# Trigger activity to force idle sync
+curl -X POST http://localhost:8080/api/v1/search \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "test", "limit": 1}'
+
+# Wait 7 seconds then check logs
+sleep 7
+docker exec crawl4ai-rag-server tail -20 /var/log/supervisor/api-server.out.log | grep "Synced"
+
+# Should see: "✅ Synced N changes to disk in 0.XXs"
+```
+
+4. **Check sync metrics**:
+```bash
+curl -H "Authorization: Bearer $API_KEY" \
+  http://localhost:8080/api/v1/stats | jq '.data.sync_metrics'
+
+# failed_syncs should be 0
+# total_syncs should increase after activity
+```
+
 ### Security Issues
 
 #### 1. Domain Blocking Not Working

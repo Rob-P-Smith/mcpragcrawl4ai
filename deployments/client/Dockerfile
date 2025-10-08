@@ -8,17 +8,16 @@ RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy minimal requirements for client
-COPY requirements-client.txt .
+# Copy minimal requirements for client mode
+COPY deployments/client/requirements-client.txt .
 
 # Install only client dependencies (no ML/vector libraries needed)
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements-client.txt
 
-# Copy only the core MCP code (no operations/data needed - those run on server)
-COPY ../../core/ ./core/
-COPY ../../api/api.py ./api/api.py
-COPY ../../api/__init__.py ./api/__init__.py
+# Copy core modules needed for MCP and API client
+COPY core/ ./core/
+COPY api/ ./api/
 
 # Create non-root user
 RUN useradd -m -u 1000 mcpuser && \
@@ -27,13 +26,14 @@ RUN useradd -m -u 1000 mcpuser && \
 # Switch to non-root user
 USER mcpuser
 
-# MCP server runs on stdin/stdout (no port needed)
-# But expose a port for health checks if needed
+# MCP server runs on stdin/stdout (no port binding needed)
+# Port 3000 is just for reference, not actually used by stdio MCP
 EXPOSE 3000
 
-# Health check (simple Python script)
+# Health check - verify Python and imports work
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-    CMD python3 -c "import sys; sys.exit(0)"
+    CMD python3 -c "import sys; from dotenv import load_dotenv; sys.exit(0)"
 
-# Start the MCP client (reads from stdin, writes to stdout)
-CMD ["python3", "core/rag_processor.py"]
+# Start the MCP client in client mode (IS_SERVER=false in .env)
+# This will forward all MCP requests to REMOTE_API_URL
+CMD ["python3", "-m", "core.rag_processor"]

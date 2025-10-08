@@ -1,8 +1,11 @@
 import sqlite3
 import asyncio
 import time
+import os
+import sys
 from typing import Optional
 from pathlib import Path
+import sqlite_vec
 
 
 class DBSyncManager:
@@ -63,6 +66,12 @@ class DBSyncManager:
         # Create memory connection
         self.memory_conn = sqlite3.connect(':memory:', check_same_thread=False)
 
+        # Load vec0 extension on memory connection BEFORE backup
+        package_dir = os.path.dirname(sqlite_vec.__file__)
+        extension_path = os.path.join(package_dir, 'vec0.so')
+        self.memory_conn.enable_load_extension(True)
+        self.memory_conn.load_extension(extension_path)
+
         # Copy entire disk DB to memory using backup API
         print("📦 Copying database to memory...")
         disk_conn.backup(self.memory_conn)
@@ -80,6 +89,22 @@ class DBSyncManager:
         asyncio.create_task(self._periodic_sync_monitor())
 
         print("🔄 Sync monitors started (idle: 5s, periodic: 5min)")
+
+        # TEST: Check if vec0 can be loaded for disk sync
+        print("🧪 Testing vec0 extension loading for disk sync...", file=sys.stderr, flush=True)
+        try:
+            test_conn = sqlite3.connect(self.disk_path, check_same_thread=False)
+            package_dir = os.path.dirname(sqlite_vec.__file__)
+            extension_path = os.path.join(package_dir, 'vec0.so')
+            print(f"   Extension path: {extension_path}", file=sys.stderr, flush=True)
+            print(f"   File exists: {os.path.exists(extension_path)}", file=sys.stderr, flush=True)
+            test_conn.enable_load_extension(True)
+            test_conn.load_extension(extension_path)
+            print("✅ vec0 extension test PASSED - sync should work", file=sys.stderr, flush=True)
+            test_conn.close()
+        except Exception as e:
+            print(f"❌ vec0 extension test FAILED: {e}", file=sys.stderr, flush=True)
+            print(f"   WARNING: Disk sync will fail!", file=sys.stderr, flush=True)
 
         return self.memory_conn
 
@@ -248,8 +273,22 @@ class DBSyncManager:
             start_time = time.time()
 
             try:
-                # Open disk connection
-                disk_conn = sqlite3.connect(self.disk_path)
+                # Open disk connection (check_same_thread=False needed for extension loading)
+                disk_conn = sqlite3.connect(self.disk_path, check_same_thread=False)
+
+                # Load sqlite-vec extension IMMEDIATELY (disk DB has vec0 tables)
+                package_dir = os.path.dirname(sqlite_vec.__file__)
+                extension_path = os.path.join(package_dir, 'vec0.so')
+
+                print(f"🔍 DEBUG: About to load vec0 extension", file=sys.stderr, flush=True)
+                print(f"   sqlite_vec.__file__: {sqlite_vec.__file__}", file=sys.stderr, flush=True)
+                print(f"   Extension path: {extension_path}", file=sys.stderr, flush=True)
+                print(f"   File exists: {os.path.exists(extension_path)}", file=sys.stderr, flush=True)
+
+                disk_conn.enable_load_extension(True)
+                disk_conn.load_extension(extension_path)
+                print(f"✅ Extension loaded successfully", file=sys.stderr, flush=True)
+
                 disk_conn.execute("PRAGMA journal_mode=WAL")
                 disk_conn.execute("PRAGMA synchronous=NORMAL")
 
@@ -325,10 +364,29 @@ class DBSyncManager:
             table_name: Name of table to sync
             changes: List of (record_id, operation) tuples
         """
+        # Schema registry for virtual tables that don't support PRAGMA table_info
+        # Maps table_name -> (columns, primary_key_column)
+        # Note: vec0 virtual tables have an implicit 'rowid' column that comes first in SELECT *
+        VIRTUAL_TABLE_SCHEMAS = {
+            'content_vectors': (['rowid', 'embedding', 'content_id'], 'content_id')
+        }
+
         # Get column names for this table
-        columns = [row[1] for row in self.memory_conn.execute(
-            f"PRAGMA table_info({table_name})"
-        ).fetchall()]
+        if table_name in VIRTUAL_TABLE_SCHEMAS:
+            # Use hard-coded schema for virtual tables (PRAGMA table_info returns empty for vec0)
+            columns, pk_column = VIRTUAL_TABLE_SCHEMAS[table_name]
+            print(f"  Using hard-coded schema for virtual table '{table_name}': {columns}")
+        else:
+            # Use PRAGMA for regular tables
+            columns = [row[1] for row in self.memory_conn.execute(
+                f"PRAGMA table_info({table_name})"
+            ).fetchall()]
+            pk_column = 'id'  # Default primary key for regular tables
+
+        # Validate we got columns
+        if not columns:
+            print(f"  ❌ WARNING: No columns found for table '{table_name}', skipping sync")
+            return
 
         column_names = ','.join(columns)
         placeholders = ','.join(['?' for _ in columns])
@@ -339,9 +397,9 @@ class DBSyncManager:
 
         for record_id, operation in changes:
             if operation in ('INSERT', 'UPDATE'):
-                # Fetch record from memory
+                # Fetch record from memory using the correct primary key column
                 row = self.memory_conn.execute(
-                    f"SELECT * FROM {table_name} WHERE id = ?",
+                    f"SELECT * FROM {table_name} WHERE {pk_column} = ?",
                     (record_id,)
                 ).fetchone()
 
@@ -361,7 +419,7 @@ class DBSyncManager:
         # Execute batch DELETE
         if deletes:
             disk_conn.executemany(
-                f"DELETE FROM {table_name} WHERE id = ?",
+                f"DELETE FROM {table_name} WHERE {pk_column} = ?",
                 [(del_id,) for del_id in deletes]
             )
 
