@@ -1,0 +1,8 @@
+"""
+Lightweight API package for client mode
+Only exports the API client for MCP-to-REST translation
+"""
+
+from .client import api_client
+
+__all__ = ['api_client']

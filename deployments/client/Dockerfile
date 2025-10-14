@@ -15,9 +15,12 @@ COPY deployments/client/requirements-client.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements-client.txt
 
-# Copy core modules needed for MCP and API client
-COPY core/ ./core/
-COPY api/ ./api/
+# Copy only the specific files needed for client mode
+# Client only needs rag_processor.py and lightweight API client
+RUN mkdir -p ./core ./api
+COPY core/rag_processor.py ./core/
+COPY api/__init__.py.client ./api/__init__.py
+COPY api/client.py ./api/
 
 # Create non-root user
 RUN useradd -m -u 1000 mcpuser && \

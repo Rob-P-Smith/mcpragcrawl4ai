@@ -2,9 +2,8 @@ version: '3.8'
 
 services:
   mcp-client:
-    build:
-      context: ../..
-      dockerfile: deployments/client/Dockerfile
+    # Use pre-built image (loaded via docker load)
+    image: crawl4ai-rag-client:latest
     container_name: crawl4ai-rag-client
     env_file:
       - .env
