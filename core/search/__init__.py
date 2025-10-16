@@ -15,6 +15,10 @@ from .vector_retriever import VectorRetriever, get_vector_retriever
 from .graph_retriever import GraphRetriever, GraphRetrieverSync, get_graph_retriever
 from .hybrid_retriever import HybridRetriever, HybridRetrieverSync
 
+# Phase 3: KG-Powered Expansion
+from .entity_expander import EntityExpander, EntityExpanderSync, get_entity_expander
+from .expanded_retriever import ExpandedHybridRetriever, ExpandedHybridRetrieverSync
+
 __all__ = [
     # Phase 1
     "QueryParser",
@@ -30,4 +34,10 @@ __all__ = [
     "get_graph_retriever",
     "HybridRetriever",
     "HybridRetrieverSync",
+    # Phase 3
+    "EntityExpander",
+    "EntityExpanderSync",
+    "get_entity_expander",
+    "ExpandedHybridRetriever",
+    "ExpandedHybridRetrieverSync",
 ]
