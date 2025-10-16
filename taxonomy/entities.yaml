@@ -1,0 +1,243 @@
+# Streamlined Entity Taxonomy for Knowledge Graph
+# ~100-110 types with broad coverage and general utility types
+# Format: Primary::Sub1::Sub2 (hierarchical when useful)
+
+entity_categories:
+
+  # ============================================================================
+  # TECHNOLOGY & SOFTWARE (30 types)
+  # ============================================================================
+  technology:
+    # General Software Categories
+    - Technology::Software                         # Any software
+    - Technology::Framework                        # Any framework
+    - Technology::Library                          # Any library
+    - Technology::Tool                             # Any tool
+    - Technology::Platform                         # Any platform
+    - Technology::Application                      # Any application
+    - Technology::Service                          # Any service
+    - Technology::API                              # Any API
+
+    # Programming
+    - Programming::Language                        # Any programming language
+    - Programming::Framework                       # Programming frameworks
+    - Programming::Library                         # Programming libraries
+    - Programming::Runtime                         # Runtime environments
+
+    # Web Technologies
+    - Web::Framework                               # Web frameworks (frontend/backend)
+    - Web::Server                                  # Web servers
+    - Web::Browser                                 # Web browsers
+    - Web::Protocol                                # Web protocols
+
+    # Development
+    - Development::IDE                             # IDEs and editors
+    - Development::Tool                            # Development tools
+    - Development::BuildSystem                     # Build systems
+    - Development::PackageManager                  # Package managers
+    - Development::VersionControl                  # Version control systems
+
+    # Testing & Quality
+    - Testing::Framework                           # Testing frameworks
+    - Testing::Tool                                # Testing tools
+
+    # Hardware
+    - Hardware::Processor                          # CPUs, GPUs, TPUs
+    - Hardware::Device                             # Computing devices
+    - Hardware::Component                          # Hardware components
+
+    # Operating Systems
+    - OperatingSystem::Desktop                     # Desktop OSes
+    - OperatingSystem::Server                      # Server OSes
+    - OperatingSystem::Mobile                      # Mobile OSes
+    - OperatingSystem::Embedded                    # Embedded OSes
+
+  # ============================================================================
+  # DATABASES & DATA (12 types)
+  # ============================================================================
+  data:
+    # Databases
+    - Database::Relational                         # SQL databases
+    - Database::NoSQL                              # NoSQL databases
+    - Database::Graph                              # Graph databases
+    - Database::Vector                             # Vector databases
+    - Database::InMemory                           # In-memory databases
+    - Database::Search                             # Search engines
+
+    # Data Systems
+    - Data::Warehouse                              # Data warehouses
+    - Data::Lake                                   # Data lakes
+    - Data::Pipeline                               # Data pipelines
+    - Data::Processing                             # Data processing systems
+    - Data::Analytics                              # Analytics platforms
+    - Data::Visualization                          # Visualization tools
+
+  # ============================================================================
+  # AI & MACHINE LEARNING (15 types)
+  # ============================================================================
+  ai:
+    # AI Models
+    - AI::Model                                    # Any AI model
+    - AI::LLM                                      # Large language models
+    - AI::VisionModel                              # Computer vision models
+    - AI::AudioModel                               # Audio/speech models
+    - AI::MultimodalModel                          # Multimodal models
+
+    # ML Systems
+    - MachineLearning::Framework                   # ML frameworks
+    - MachineLearning::Library                     # ML libraries
+    - MachineLearning::Algorithm                   # ML algorithms
+
+    # AI Infrastructure
+    - AI::InferenceEngine                          # Inference engines
+    - AI::TrainingSystem                           # Training systems
+    - AI::Orchestration                            # AI orchestration (LangChain, etc.)
+
+    # AI Services
+    - AI::Provider                                 # AI providers
+    - AI::Service                                  # AI services
+    - AI::Platform                                 # AI platforms
+    - AI::Agent                                    # AI agents
+
+  # ============================================================================
+  # CLOUD & INFRASTRUCTURE (15 types)
+  # ============================================================================
+  infrastructure:
+    # Cloud
+    - Cloud::Provider                              # Cloud providers
+    - Cloud::Service                               # Cloud services
+    - Cloud::Platform                              # Cloud platforms
+    - Cloud::Compute                               # Compute services
+    - Cloud::Storage                               # Storage services
+    - Cloud::Database                              # Managed databases
+
+    # Containers
+    - Container::Runtime                           # Container runtimes
+    - Container::Orchestration                     # Kubernetes, etc.
+    - Container::Registry                          # Container registries
+
+    # Infrastructure Tools
+    - Infrastructure::IaC                          # Infrastructure as Code
+    - Infrastructure::Configuration                # Configuration management
+    - Infrastructure::Monitoring                   # Monitoring tools
+    - Infrastructure::Logging                      # Logging systems
+
+    # Networking
+    - Network::Protocol                            # Network protocols
+    - Network::Infrastructure                      # Network infrastructure
+
+  # ============================================================================
+  # ORGANIZATIONS (14 types)
+  # ============================================================================
+  organizations:
+    # Companies
+    - Company::Technology                          # Tech companies
+    - Company::Software                            # Software companies
+    - Company::AI                                  # AI companies (OpenAI, Anthropic, Mistral)
+    - Company::Cloud                               # Cloud providers (AWS, Microsoft, Google)
+    - Company::Database                            # Database companies (MongoDB, Neo4j, Redis Labs)
+    - Company::Startup                             # Startups
+    - Company::Enterprise                          # Enterprise companies (Microsoft, Oracle, SAP)
+
+    # Organizations
+    - Organization::OpenSource                     # Open source orgs
+    - Organization::Foundation                     # Foundations (Linux Foundation, Apache, CNCF)
+    - Organization::Research                       # Research organizations
+    - Organization::Research::AI                   # AI research labs (DeepMind, FAIR, Google Brain)
+    - Organization::Research::Academic             # Academic institutions (MIT CSAIL, Stanford AI Lab)
+    - Organization::Academic                       # Universities, institutions
+    - Organization::Consortium                     # Industry consortiums
+
+  # ============================================================================
+  # PEOPLE (6 types)
+  # ============================================================================
+  people:
+    - Person::Developer                            # Software developers, engineers
+    - Person::Researcher                           # AI researchers, scientists
+    - Person::Executive                            # CEOs, CTOs, founders
+    - Person::Author                               # Authors, writers
+    - Person::Expert                               # Domain experts
+    - Person::Contributor                          # Contributors
+
+  # ============================================================================
+  # LOCATIONS (10 types)
+  # ============================================================================
+  locations:
+    - Location::Continent                          # North America, Europe, Asia
+    - Location::Country                            # United States, China, UK
+    - Location::Region                             # Regions, states, provinces
+    - Location::City                               # Cities
+    - Location::TechHub                            # Tech hubs (San Francisco, Seattle, London)
+    - Location::Datacenter                         # Data center locations
+    - Location::Office                             # Office locations
+    - Location::Campus                             # Corporate campuses
+    - Location::Venue                              # Event venues
+    - Location::Zone                               # Geographic zones, availability zones
+
+  # ============================================================================
+  # TEMPORAL (7 types)
+  # ============================================================================
+  temporal:
+    - Date::Year                                   # Years
+    - Date::Month                                  # Months
+    - Date::Day                                    # Specific dates
+    - Date::Event                                  # Event dates (releases, launches, announcements)
+    - Date::Period                                 # Time periods, eras (AI era, Web3 era)
+    - Date::Version                                # Version numbers/dates
+    - Date::Timestamp                              # Timestamps
+
+  # ============================================================================
+  # CONCEPTS & METHODOLOGIES (8 types)
+  # ============================================================================
+  concepts:
+    - Concept::Paradigm                            # Programming paradigms
+    - Concept::Pattern                             # Design patterns
+    - Concept::Architecture                        # Architectural patterns
+    - Concept::Methodology                         # Development methodologies
+    - Concept::Practice                            # Best practices
+    - Concept::Principle                           # Design principles
+    - Concept::Standard                            # Standards
+    - Concept::Specification                       # Specifications
+
+  # ============================================================================
+  # SECURITY (6 types)
+  # ============================================================================
+  security:
+    - Security::Authentication                     # Authentication methods
+    - Security::Authorization                      # Authorization methods
+    - Security::Encryption                         # Encryption
+    - Security::Protocol                           # Security protocols
+    - Security::Tool                               # Security tools
+    - Security::Vulnerability                      # Vulnerabilities, CVEs
+
+  # ============================================================================
+  # PRODUCTS & CONTENT (13 types)
+  # ============================================================================
+  products:
+    - Product::Software                            # Software products
+    - Product::Software::Application               # Software applications
+    - Product::Software::API                       # API products and services
+    - Product::Hardware                            # Hardware products
+    - Product::Hardware::Device                    # GPUs, TPUs, servers
+    - Product::Service                             # Service products
+    - Product::Cloud::Service                      # Cloud services and platforms
+    - Product::API                                 # API products
+    - Product::Platform                            # Platform products
+    - Product::Dataset                             # Datasets
+    - Product::Model                               # Pre-trained models
+    - Content::Documentation                       # Documentation
+    - Content::Tutorial                            # Tutorials, guides
+
+  # ============================================================================
+  # METRICS & MEASUREMENTS (5 types)
+  # ============================================================================
+  metrics:
+    - Metric::Performance                          # Performance metrics
+    - Metric::Performance::Benchmark               # Benchmarks (MMLU, HumanEval, etc.)
+    - Metric::Benchmark                            # General benchmarks
+    - Metric::Quality                              # Quality metrics
+    - Metric::Business                             # Business metrics
+
+# Total: 119 types (slightly over but comprehensive)
+# Balanced between technical specificity and broad coverage
+# Includes all standard utility types (people, locations, dates, companies, products)

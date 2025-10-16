@@ -3,6 +3,8 @@ sentence-transformers==3.2.1
 sqlite-vec==0.1.6
 numpy==2.2.1
 requests==2.32.5
+gliner==0.2.15
+pyyaml==6.0.2
 
 # REST API dependencies
 fastapi==0.115.6
