@@ -68,7 +68,7 @@ def upgrade(db: sqlite3.Connection) -> bool:
         import os
         sql_file_path = os.path.join(
             os.path.dirname(__file__),
-            "001_add_kg_support.sql"
+            "v001_add_kg_support.sql"
         )
 
         if os.path.exists(sql_file_path):

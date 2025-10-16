@@ -224,22 +224,6 @@ class RAGDatabase:
                 self.db.execute("INSERT OR REPLACE INTO sessions (session_id, last_active) VALUES (?, CURRENT_TIMESTAMP)",
                                (self.session_id,))
 
-                # Run KG migration if needed
-                try:
-                    from migrations.001_add_kg_support import check_migration_needed, upgrade
-
-                    if check_migration_needed(self.db):
-                        print("🔧 Running KG support migration...", file=sys.stderr, flush=True)
-                        if upgrade(self.db):
-                            print("✓ KG migration complete", file=sys.stderr, flush=True)
-                        else:
-                            print("⚠️  KG migration failed - KG features disabled", file=sys.stderr, flush=True)
-                except ImportError:
-                    # Migration not available, skip
-                    pass
-                except Exception as e:
-                    print(f"⚠️  KG migration error: {e}", file=sys.stderr, flush=True)
-
                 # Populate initial blocked domains if table is empty
                 blocked_count = self.db.execute("SELECT COUNT(*) FROM blocked_domains").fetchone()[0]
                 if blocked_count == 0:

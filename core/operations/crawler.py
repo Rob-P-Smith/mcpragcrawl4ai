@@ -209,6 +209,16 @@ class Crawl4AIRAG:
                         "url": url
                     }
 
+                # Check if page is an error/rate-limited page
+                error_check = ContentCleaner.is_error_page(markdown or content, title, status_code)
+                if error_check["is_error"]:
+                    return {
+                        "success": False,
+                        "error": f"Error page detected: {error_check['reason']}",
+                        "error_reason": error_check["reason"],
+                        "url": url
+                    }
+
                 # Clean the markdown content to remove navigation/boilerplate
                 cleaned_result = ContentCleaner.clean_and_validate(content, markdown, url)
                 cleaned_markdown = cleaned_result["cleaned_content"]
@@ -473,6 +483,14 @@ class Crawl4AIRAG:
                         continue
 
                     if not content:
+                        failed_pages.append(current_url)
+                        continue
+
+                    # Check if page is an error/rate-limited page
+                    from core.data.content_cleaner import ContentCleaner
+                    error_check = ContentCleaner.is_error_page(markdown or content, title, status_code)
+                    if error_check["is_error"]:
+                        print(f"⊘ Skipping error page ({error_check['reason']}): {current_url}", file=sys.stderr, flush=True)
                         failed_pages.append(current_url)
                         continue
 
