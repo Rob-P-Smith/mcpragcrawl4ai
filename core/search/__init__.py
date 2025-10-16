@@ -2,17 +2,32 @@
 Search Module for KG-Enhanced RAG
 
 This module provides query parsing, entity extraction,
-and embedding generation for hybrid search across
+embedding generation, and hybrid retrieval across
 SQLite vector DB and Neo4j Knowledge Graph.
 """
 
+# Phase 1: Query Understanding
 from .query_parser import QueryParser, ParsedQuery, get_query_parser
 from .embeddings import QueryEmbedder, get_query_embedder
 
+# Phase 2: Parallel Retrieval
+from .vector_retriever import VectorRetriever, get_vector_retriever
+from .graph_retriever import GraphRetriever, GraphRetrieverSync, get_graph_retriever
+from .hybrid_retriever import HybridRetriever, HybridRetrieverSync
+
 __all__ = [
+    # Phase 1
     "QueryParser",
     "ParsedQuery",
     "get_query_parser",
     "QueryEmbedder",
     "get_query_embedder",
+    # Phase 2
+    "VectorRetriever",
+    "get_vector_retriever",
+    "GraphRetriever",
+    "GraphRetrieverSync",
+    "get_graph_retriever",
+    "HybridRetriever",
+    "HybridRetrieverSync",
 ]
