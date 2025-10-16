@@ -3,7 +3,7 @@ services:
     build:
       context: ../..
       dockerfile: deployments/server/Dockerfile.api
-    container_name: crawl4ai-rag-server
+    container_name: kg-rag-server
     ports:
       - "8080:8080"  # REST API
       - "3000:3000"  # MCP Server

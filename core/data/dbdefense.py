@@ -97,13 +97,36 @@ class SQLInjectionDefense:
         value_upper = value.upper()
 
         # Check for dangerous SQL keywords and patterns
+        # Only check for SQL keywords if they appear in suspicious contexts
+        # (e.g., with quotes, semicolons, or after operators like =, OR, AND)
         for keyword in SQLInjectionDefense.DANGEROUS_SQL_KEYWORDS:
-            # Use word boundaries to avoid false positives
-            pattern = r'\b' + re.escape(keyword) + r'\b'
-            if re.search(pattern, value_upper):
-                raise ValueError(
-                    f"{field_name} contains potentially dangerous SQL pattern: {keyword}"
-                )
+            # Skip checking for keywords that are common in URLs/documentation
+            # (UPDATE, SELECT, DELETE, INSERT, CREATE, ALTER, DROP, JOIN, UNION, EXECUTE, EXEC)
+            common_url_words = ['UPDATE', 'SELECT', 'DELETE', 'INSERT', 'CREATE',
+                               'ALTER', 'DROP', 'JOIN', 'UNION', 'EXECUTE', 'EXEC',
+                               'MERGE', 'TRUNCATE']
+
+            # For common SQL words, only flag if in suspicious context
+            if keyword in common_url_words:
+                # Check for suspicious patterns: keyword with quotes, semicolons, or operators
+                suspicious_patterns = [
+                    r"['\";]\s*" + re.escape(keyword),  # Quote before keyword
+                    re.escape(keyword) + r"\s*['\";]",  # Quote after keyword
+                    r"=\s*" + re.escape(keyword),        # Equals before keyword
+                    r";\s*" + re.escape(keyword),        # Semicolon before keyword
+                    r"\b(OR|AND)\s+" + re.escape(keyword),  # OR/AND before keyword
+                ]
+                if any(re.search(p, value_upper) for p in suspicious_patterns):
+                    raise ValueError(
+                        f"{field_name} contains potentially dangerous SQL pattern: {keyword}"
+                    )
+            else:
+                # For other dangerous keywords (LOAD_FILE, SLEEP, etc.), always block
+                pattern = r'\b' + re.escape(keyword) + r'\b'
+                if re.search(pattern, value_upper):
+                    raise ValueError(
+                        f"{field_name} contains potentially dangerous SQL pattern: {keyword}"
+                    )
 
         # Check for common SQL injection patterns
         if re.search(r"['\";].*(\bOR\b|\bAND\b).*['\";=]", value_upper):

@@ -3,21 +3,33 @@ import sys
 import asyncio
 import json
 from typing import Dict, Any
-from dotenv import load_dotenv
 
-load_dotenv()
-
-from operations.crawler import Crawl4AIRAG
-from core.data.storage import GLOBAL_DB, log_error
-
+# Check client mode FIRST, before any imports that might fail
+# Environment variable IS_SERVER is set by docker-compose env_file
+# Don't use load_dotenv() here - env vars are injected by Docker at runtime
 IS_CLIENT_MODE = os.getenv("IS_SERVER", "true").lower() == "false"
 
+# Load dotenv for any additional config (after mode check)
+from dotenv import load_dotenv
+load_dotenv()
+
 if IS_CLIENT_MODE:
+    # Client mode: only import lightweight API client (no FastAPI dependencies)
     sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from api.api import api_client
+    from api.client import api_client
     GLOBAL_RAG = None
+    GLOBAL_DB = None  # Not used in client mode
+
+    # Simple log_error function for client mode
+    def log_error(context: str, error: Exception, url: str = ""):
+        print(f"ERROR [{context}]: {str(error)}", file=sys.stderr, flush=True)
+
     print("🔗 Running in CLIENT mode - API calls will be forwarded to remote server", file=sys.stderr, flush=True)
 else:
+    # Server mode: import crawler and storage
+    from core.operations.crawler import Crawl4AIRAG
+    from core.data.storage import GLOBAL_DB, log_error
+
     crawl4ai_url = os.getenv("CRAWL4AI_URL", "http://localhost:11235")
     GLOBAL_RAG = Crawl4AIRAG(crawl4ai_url=crawl4ai_url)
     print(f"🏠 Running in SERVER mode - using local RAG system (Crawl4AI: {crawl4ai_url})", file=sys.stderr, flush=True)
@@ -195,7 +207,7 @@ class MCPServer:
                 "jsonrpc": "2.0",
                 "id": request.get("id"),
                 "result": {
-                    "protocolVersion": "2025-06-18",
+                    "protocolVersion": "2024-11-05",
                     "capabilities": {
                         "tools": {"listChanged": False}
                     },
@@ -560,7 +572,16 @@ async def main():
             }
             print(json.dumps(error_response), flush=True)
 
-from operations.crawler import validate_url, validate_string_length, validate_integer_range, validate_deep_crawl_params, validate_float_range
+# Import validation functions - only needed in server mode, but safe to import here
+if not IS_CLIENT_MODE:
+    from operations.crawler import validate_url, validate_string_length, validate_integer_range, validate_deep_crawl_params, validate_float_range
+else:
+    # Client mode: define simple validation stubs (validation happens on server)
+    def validate_url(url): return True
+    def validate_string_length(s, max_len, name): return s
+    def validate_integer_range(val, min_val, max_val, name): return val
+    def validate_deep_crawl_params(depth, pages): return (depth, pages)
+    def validate_float_range(val, min_val, max_val, name): return val
 
 if __name__ == "__main__":
     asyncio.run(main())

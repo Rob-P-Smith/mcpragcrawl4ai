@@ -23,6 +23,8 @@ from langdetect import detect, LangDetectException
 from sentence_transformers import SentenceTransformer
 from core.data.sync_manager import DBSyncManager
 from core.data.content_cleaner import ContentCleaner
+from core.data.kg_queue import KGQueueManager, get_vector_rowids_for_content
+from core.data.kg_config import get_kg_config
 
 GLOBAL_MODEL = SentenceTransformer('all-MiniLM-L6-v2')
 
@@ -324,6 +326,34 @@ class RAGDatabase:
                 # Generate embeddings from the same cleaned content
                 self.generate_embeddings(content_id, cleaned_content)
 
+                # NEW: Queue for KG processing (async, non-blocking)
+                try:
+                    kg_config = get_kg_config()
+                    if kg_config.enabled:
+                        # Get markdown for KG processing (full document)
+                        cursor_check = self.execute_with_retry(
+                            'SELECT markdown, title FROM crawled_content WHERE id = ?',
+                            (content_id,)
+                        )
+                        row = cursor_check.fetchone()
+                        if row:
+                            full_markdown = row[0]
+                            doc_title = row[1]
+
+                            # Schedule KG queue check (async)
+                            try:
+                                loop = asyncio.get_event_loop()
+                                loop.create_task(
+                                    self._queue_for_kg_async(content_id, url, doc_title, full_markdown)
+                                )
+                            except RuntimeError:
+                                # Event loop not running, skip KG queuing
+                                pass
+
+                except Exception as e:
+                    # Don't fail content storage if KG queuing fails
+                    print(f"⚠️  KG queuing failed: {e}", file=sys.stderr, flush=True)
+
                 # Track write for sync (non-blocking)
                 # Note: content_vectors tracked separately in generate_embeddings()
                 if self.sync_manager:
@@ -374,6 +404,30 @@ class RAGDatabase:
                     INSERT INTO content_vectors (embedding, content_id)
                     VALUES (?, ?)
                 ''', embedding_data)
+
+                # NEW: Store chunk metadata for KG processing
+                try:
+                    vector_rowids = get_vector_rowids_for_content(self.db, content_id)
+
+                    if vector_rowids and len(vector_rowids) == len(filtered_chunks):
+                        kg_queue = KGQueueManager(self.db)
+
+                        # Calculate chunk boundaries in original content
+                        chunk_metadata = kg_queue.calculate_chunk_boundaries(content, filtered_chunks)
+
+                        # Store chunk metadata
+                        stored = kg_queue.store_chunk_metadata(
+                            content_id,
+                            chunk_metadata,
+                            vector_rowids
+                        )
+
+                        if stored > 0:
+                            print(f"   ✓ Stored {stored} chunk metadata records", file=sys.stderr, flush=True)
+
+                except Exception as e:
+                    # Don't fail embedding process if chunk tracking fails
+                    print(f"⚠️  Chunk metadata tracking failed: {e}", file=sys.stderr, flush=True)
 
             # Track vector changes for RAM DB sync (can't use triggers on virtual tables)
             if self.sync_manager:
@@ -461,6 +515,35 @@ class RAGDatabase:
         except Exception as e:
             log_error("search_similar", e)
             raise
+
+    async def _queue_for_kg_async(
+        self,
+        content_id: int,
+        url: str,
+        title: str,
+        markdown: str
+    ):
+        """
+        Queue content for KG processing (async helper method)
+
+        This method checks KG service health and queues the content if available.
+        Falls back gracefully if service is unavailable.
+        """
+        try:
+            kg_queue = KGQueueManager(self.db)
+
+            # Check health and queue (async)
+            queued = await kg_queue.queue_for_kg_processing(content_id, priority=1)
+
+            if queued:
+                logger.info(f"✓ Queued content_id={content_id} for KG processing")
+            else:
+                # Marked as skipped or service unavailable
+                logger.debug(f"Skipped KG queuing for content_id={content_id}")
+
+        except Exception as e:
+            logger.error(f"Error in KG queuing async: {e}")
+            # Don't propagate - KG is optional
 
     def target_search(self, query: str, initial_limit: int = 5, expanded_limit: int = 20) -> Dict[str, Any]:
         """

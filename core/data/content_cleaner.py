@@ -148,6 +148,89 @@ class ContentCleaner:
         }
 
     @staticmethod
+    def is_error_page(content: str, title: str = "", status_code: int = 200) -> Dict[str, Any]:
+        """
+        Detect if page is an error/empty/rate-limited page
+
+        Args:
+            content: Page content (markdown or HTML)
+            title: Page title
+            status_code: HTTP status code
+
+        Returns:
+            Dict with is_error flag and reason
+        """
+        if not content or len(content.strip()) < 50:
+            return {"is_error": True, "reason": "Empty or too short content"}
+
+        content_lower = content.lower()
+        title_lower = title.lower() if title else ""
+
+        # Check HTTP status code
+        if status_code >= 400:
+            return {"is_error": True, "reason": f"HTTP {status_code} error"}
+
+        # Error indicators in title (strong signal)
+        title_error_patterns = [
+            '404', 'not found', 'page not found', 'error',
+            'access denied', 'forbidden', '403', '401',
+            'unauthorized', 'unavailable', 'does not exist'
+        ]
+        if any(pattern in title_lower for pattern in title_error_patterns):
+            return {"is_error": True, "reason": f"Error in title: {title}"}
+
+        # Rate limiting / bot detection patterns
+        rate_limit_patterns = [
+            'rate limit', 'too many requests', 'please slow down',
+            'bot detection', 'captcha', 'human verification',
+            'access denied', 'blocked', 'suspicious activity',
+            'verify you are human', 'security check'
+        ]
+
+        # Check for rate limiting in first 500 chars (usually appears early)
+        content_sample = content_lower[:500]
+        for pattern in rate_limit_patterns:
+            if pattern in content_sample:
+                return {"is_error": True, "reason": f"Rate limiting/bot detection: '{pattern}'"}
+
+        # Error page patterns (but be more careful - check context)
+        # Only flag if multiple indicators or if content is very short
+        word_count = len(content.split())
+
+        if word_count < 100:
+            # For very short content, be more aggressive
+            short_error_patterns = [
+                'page not found', '404', 'not found', 'error occurred',
+                'something went wrong', 'page does not exist',
+                'reach this site in error', 'reached this page in error'
+            ]
+            if any(pattern in content_lower for pattern in short_error_patterns):
+                return {"is_error": True, "reason": "Error page (short content)"}
+
+        # For longer content, require multiple error indicators
+        error_keywords = [
+            'page not found', '404 error', 'page does not exist',
+            'something went wrong', 'error occurred', 'cannot find',
+            'reach this site in error', 'reached this page in error',
+            'page you are looking for', 'page has been removed'
+        ]
+
+        error_count = sum(1 for keyword in error_keywords if keyword in content_lower)
+
+        if error_count >= 2 and word_count < 300:
+            return {"is_error": True, "reason": f"Multiple error indicators ({error_count})"}
+
+        # Check for redirect/moved pages
+        redirect_patterns = [
+            'permanently moved', 'page has moved', 'redirecting',
+            'this page has been moved to'
+        ]
+        if any(pattern in content_lower for pattern in redirect_patterns) and word_count < 200:
+            return {"is_error": True, "reason": "Redirect/moved page"}
+
+        return {"is_error": False, "reason": None}
+
+    @staticmethod
     def extract_main_content(markdown: str) -> str:
         """
         Extract main article content, removing headers/footers

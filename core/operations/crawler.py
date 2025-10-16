@@ -166,6 +166,8 @@ class Crawl4AIRAG:
         try:
             # Check if domain is blocked
             from core.data.storage import GLOBAL_DB
+            from core.data.content_cleaner import ContentCleaner
+
             block_check = GLOBAL_DB.is_domain_blocked(url)
             if block_check.get("blocked"):
                 return {
@@ -207,7 +209,27 @@ class Crawl4AIRAG:
                         "url": url
                     }
 
+                # Check if page is an error/rate-limited page
+                error_check = ContentCleaner.is_error_page(markdown or content, title, status_code)
+                if error_check["is_error"]:
+                    return {
+                        "success": False,
+                        "error": f"Error page detected: {error_check['reason']}",
+                        "error_reason": error_check["reason"],
+                        "url": url
+                    }
+
+                # Clean the markdown content to remove navigation/boilerplate
+                cleaned_result = ContentCleaner.clean_and_validate(content, markdown, url)
+                cleaned_markdown = cleaned_result["cleaned_content"]
+
+                # Truncate to first 5000 characters for LLM context
+                truncated_markdown = cleaned_markdown[:5000]
+                if len(cleaned_markdown) > 5000:
+                    truncated_markdown += "\n\n... (content truncated)"
+
                 if return_full_content:
+                    # For storage: return full HTML content and markdown
                     return {
                         "success": True,
                         "url": url,
@@ -217,14 +239,15 @@ class Crawl4AIRAG:
                         "status_code": status_code
                     }
                 else:
+                    # For LLM tool response: return cleaned markdown (first 5000 chars)
                     return {
                         "success": True,
                         "url": url,
                         "title": title,
-                        "content_preview": content[:300] + "..." if len(content) > 300 else content,
-                        "content_length": len(content),
+                        "markdown": truncated_markdown,
+                        "content_length": len(cleaned_markdown),
                         "status_code": status_code,
-                        "message": f"Crawled '{title}' - {len(content)} characters"
+                        "message": f"Crawled '{title}' - {len(cleaned_markdown)} characters (returning first 5000)"
                     }
         except Exception as e:
             print(f"Error crawling URL {url}: {str(e)}", file=sys.stderr, flush=True)
@@ -460,6 +483,14 @@ class Crawl4AIRAG:
                         continue
 
                     if not content:
+                        failed_pages.append(current_url)
+                        continue
+
+                    # Check if page is an error/rate-limited page
+                    from core.data.content_cleaner import ContentCleaner
+                    error_check = ContentCleaner.is_error_page(markdown or content, title, status_code)
+                    if error_check["is_error"]:
+                        print(f"⊘ Skipping error page ({error_check['reason']}): {current_url}", file=sys.stderr, flush=True)
                         failed_pages.append(current_url)
                         continue
 
