@@ -25,11 +25,11 @@ else:
     print(f"⚠️  .env file not found at: {env_path}")
 
 class BatchCrawler:
-    def __init__(self, urls_file="urls.md", api_url="http://localhost:8080", api_key=None, max_concurrent=10):
+    def __init__(self, urls_file="urls.md", api_url="http://localhost:8080", api_key=None, max_concurrent=4, cooldown=1.0):
         self.urls_file = urls_file
         self.api_url = api_url
         self.max_concurrent = max_concurrent
-        # Try to get API key from env vars: LOCAL_API_KEY, REMOTE_API_KEY, or RAG_API_KEY
+        self.cooldown = cooldown
         self.api_key = api_key or os.getenv("LOCAL_API_KEY") or os.getenv("REMOTE_API_KEY") or os.getenv("RAG_API_KEY")
 
         if not self.api_key:
@@ -43,6 +43,7 @@ class BatchCrawler:
         }
         print(f"🔑 Using API key: {self.api_key[:20]}...")
         print(f"⚡ Max concurrent requests: {self.max_concurrent}")
+        print(f"⏱️  Cooldown between requests: {self.cooldown}s (anti-bot protection)")
 
     def load_urls(self):
         """Load URLs from urls.md file"""
@@ -58,7 +59,7 @@ class BatchCrawler:
                     line = line.strip()
                     if line and not line.startswith('#'):
                         urls.append(line)
-                        if line_num <= 10:  # Show first 10
+                        if line_num <= 10:
                             print(f"📋 Loaded URL {len(urls)}: {line}")
         except Exception as e:
             print(f"❌ Error reading URLs file: {e}")
@@ -164,6 +165,10 @@ class BatchCrawler:
                     result = await self.crawl_url_async(session, url, index, total)
                     self.results.append(result)
 
+                    # Apply cooldown to avoid triggering anti-bot protections
+                    if self.cooldown > 0:
+                        await asyncio.sleep(self.cooldown)
+
                     # Progress update every 50 URLs
                     if len(self.results) % 50 == 0:
                         elapsed = time.time() - batch_start_time
@@ -235,17 +240,22 @@ def main():
     if len(sys.argv) > 2:
         api_url = sys.argv[2]
 
-    max_concurrent = 10  # Default concurrent requests
+    max_concurrent = 4  # Default concurrent requests (anti-bot safe)
     if len(sys.argv) > 3:
         max_concurrent = int(sys.argv[3])
 
-    crawler = BatchCrawler(urls_file, api_url, max_concurrent=max_concurrent)
+    cooldown = 1.0  # Default 1 second cooldown between requests
+    if len(sys.argv) > 4:
+        cooldown = float(sys.argv[4])
+
+    crawler = BatchCrawler(urls_file, api_url, max_concurrent=max_concurrent, cooldown=cooldown)
     crawler.run_batch_crawl()
 
 if __name__ == "__main__":
     print("🤖 Crawl4AI Batch URL Crawler")
-    print("Usage: python3 batch_crawler.py [urls_file] [api_url] [max_concurrent]")
-    print("Example: python3 batch_crawler.py urls.md http://localhost:8080 10")
+    print("Usage: python3 batch_crawler.py [urls_file] [api_url] [max_concurrent] [cooldown]")
+    print("Example: python3 batch_crawler.py urls.md http://localhost:8080 4 1.0")
+    print("Defaults: max_concurrent=4, cooldown=1.0s (anti-bot safe)")
     print("")
 
     main()

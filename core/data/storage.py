@@ -245,13 +245,26 @@ class RAGDatabase:
             log_error("init_database", e)
             raise
 
-    def chunk_content(self, content: str, chunk_size: int = 500, overlap: int = 50) -> List[str]:
-        words = content.split()
+    def chunk_content(self, content: str, chunk_size: int = 1000, overlap: int = 0) -> List[str]:
+        """
+        Chunk content by character count for consistent alignment with KG pipeline
+
+        Args:
+            content: Text to chunk
+            chunk_size: Number of characters per chunk (default 1000)
+            overlap: Character overlap between chunks (default 0)
+
+        Returns:
+            List of text chunks
+        """
         chunks = []
-        for i in range(0, len(words), chunk_size - overlap):
-            chunk = ' '.join(words[i:i + chunk_size])
+        step = chunk_size - overlap
+
+        for i in range(0, len(content), step):
+            chunk = content[i:i + chunk_size]
             if chunk.strip():
                 chunks.append(chunk)
+
         return chunks
 
     def store_content(self, url: str, title: str, content: str, markdown: str,
