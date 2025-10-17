@@ -1,23 +1,19 @@
 services:
-  crawl4ai-rag:
+  knowledge-server:
     build:
       context: ../..
       dockerfile: deployments/server/Dockerfile.api
-    container_name: kg-rag-server
-    ports:
-      - "8080:8080"  # REST API
-      - "3000:3000"  # MCP Server
+    image: knowledge-server:latest
+    container_name: knowledge-server
+    network_mode: "host"
     volumes:
       - ../../data:/app/data
     env_file:
       - .env
     environment:
-      - CRAWL4AI_URL=http://crawl4ai:11235
+      - SERVER_HOST=0.0.0.0
+      - SERVER_PORT=8080
+      - CRAWL4AI_URL=http://localhost:11235
+      - KG_SERVICE_URL=http://localhost:8088
       - IS_SERVER=true
     restart: unless-stopped
-    networks:
-      - crawler_default
-
-networks:
-  crawler_default:
-    external: true

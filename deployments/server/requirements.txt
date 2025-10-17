@@ -4,6 +4,8 @@ sqlite-vec==0.1.6
 numpy==2.2.1
 requests==2.32.5
 langdetect==1.0.9
+gliner==0.2.9
+pyyaml==6.0.2
 
 # REST API dependencies
 fastapi==0.115.6

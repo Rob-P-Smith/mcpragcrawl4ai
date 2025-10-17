@@ -439,6 +439,7 @@ class Crawl4AIRAG:
             stored_pages = []
             skipped_non_english = []
             failed_pages = []
+            crawled_pages = 0  # Track total pages actually crawled
             base_domain = urlparse(url).netloc
 
             while queue and len(stored_pages) < max_pages:
@@ -447,6 +448,7 @@ class Crawl4AIRAG:
                     continue
 
                 visited.add(current_url)
+                crawled_pages += 1  # Increment for each page we actually crawl
                 print(f"📄 Crawling (depth {depth}): {current_url}", file=sys.stderr, flush=True)
 
                 try:
@@ -496,7 +498,8 @@ class Crawl4AIRAG:
 
                     if not self._is_english(content, current_url):
                         skipped_non_english.append(current_url)
-                        if depth < max_depth:
+                        # Only add links if we haven't crawled too many pages yet
+                        if depth < max_depth and crawled_pages < max_pages * 1.1:
                             self._add_links_to_queue(links, visited, queue, depth,
                                                     base_domain, include_external)
                         continue
@@ -522,7 +525,8 @@ class Crawl4AIRAG:
                     else:
                         failed_pages.append(current_url)
 
-                    if depth < max_depth:
+                    # Only add links if we haven't crawled too many pages yet
+                    if depth < max_depth and crawled_pages < max_pages * 1.1:
                         self._add_links_to_queue(links, visited, queue, depth,
                                                 base_domain, include_external)
 
@@ -530,13 +534,15 @@ class Crawl4AIRAG:
                     print(f"Error crawling {current_url}: {str(e)}", file=sys.stderr, flush=True)
                     failed_pages.append(current_url)
 
-            total_crawled = len(stored_pages) + len(skipped_non_english) + len(failed_pages)
-            print(f"Deep crawl completed: {total_crawled} pages crawled, {len(stored_pages)} stored (English), {len(skipped_non_english)} skipped (non-English), {len(failed_pages)} failed", file=sys.stderr, flush=True)
+                # Rate limiting: wait 0.5 seconds between crawl requests
+                time.sleep(0.5)
+
+            print(f"Deep crawl completed: {crawled_pages} pages crawled, {len(stored_pages)} stored (English), {len(skipped_non_english)} skipped (non-English), {len(failed_pages)} failed", file=sys.stderr, flush=True)
 
             return {
                 "success": True,
                 "starting_url": url,
-                "pages_crawled": total_crawled,
+                "pages_crawled": crawled_pages,
                 "pages_stored": len(stored_pages),
                 "pages_skipped_language": len(skipped_non_english),
                 "pages_failed": len(failed_pages),

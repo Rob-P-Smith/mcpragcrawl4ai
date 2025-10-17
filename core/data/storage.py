@@ -26,6 +26,7 @@ from core.data.content_cleaner import ContentCleaner
 from core.data.kg_queue import KGQueueManager, get_vector_rowids_for_content
 from core.data.kg_config import get_kg_config
 
+logger = logging.getLogger(__name__)
 GLOBAL_MODEL = SentenceTransformer('all-MiniLM-L6-v2')
 
 class RAGDatabase:

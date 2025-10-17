@@ -70,19 +70,6 @@ class APIClient:
             "timeout": timeout
         })
 
-    async def search_knowledge(self, query: str, limit: int = 5, tags: Optional[str] = None) -> Dict[str, Any]:
-        payload = {"query": query, "limit": limit}
-        if tags:
-            payload["tags"] = tags
-        return await self.make_request("POST", "/api/v1/search", payload)
-
-    async def target_search(self, query: str, initial_limit: int = 5, expanded_limit: int = 20) -> Dict[str, Any]:
-        return await self.make_request("POST", "/api/v1/search/target", {
-            "query": query,
-            "initial_limit": initial_limit,
-            "expanded_limit": expanded_limit
-        })
-
     async def list_memory(self, filter: Optional[str] = None, limit: int = 100) -> Dict[str, Any]:
         params = {}
         if filter:
@@ -93,9 +80,6 @@ class APIClient:
 
     async def get_database_stats(self) -> Dict[str, Any]:
         return await self.make_request("GET", "/api/v1/stats")
-
-    async def list_domains(self) -> Dict[str, Any]:
-        return await self.make_request("GET", "/api/v1/domains")
 
     async def add_blocked_domain(self, pattern: str, description: str = "") -> Dict[str, Any]:
         return await self.make_request("POST", "/api/v1/blocked-domains", {

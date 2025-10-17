@@ -83,68 +83,97 @@ class GraphRetriever:
         """
         Query kg-service for documents related to entities
 
+        Strategy:
+        1. Search for entities matching query terms
+        2. Get chunks containing those entities (with vector_rowids)
+        3. Retrieve chunk content from SQLite using vector_rowids
+        4. Return formatted results
+
         Args:
             entities: Entity names to search for
             limit: Max results
             min_confidence: Min match confidence
 
         Returns:
-            List of related documents
+            List of related document chunks with graph metadata
         """
         try:
             client = await self._get_client()
 
-            # Build Cypher query to find documents mentioning entities
-            # This is a simplified version - you can expand based on kg-service API
-            cypher = """
-            MATCH (e:Entity)-[:MENTIONED_IN]->(d:Document)
-            WHERE e.name IN $entity_names
-            WITH d, COUNT(DISTINCT e) as entity_count
-            ORDER BY entity_count DESC
-            LIMIT $limit
-            RETURN d.url as url, d.title as title, d.content as content,
-                   d.timestamp as timestamp, entity_count
-            """
-
-            # Call kg-service API
-            response = await client.post(
-                f"{self.kg_service_url}/api/v1/query/cypher",
+            # Step 1: Find matching entities
+            entity_search_response = await client.post(
+                f"{self.kg_service_url}/api/v1/search/entities",
                 json={
-                    "query": cypher,
-                    "parameters": {
-                        "entity_names": entities,
-                        "limit": limit
-                    }
+                    "entity_terms": entities,
+                    "limit": 50,
+                    "min_mentions": 1
                 }
             )
 
-            if response.status_code != 200:
+            if entity_search_response.status_code != 200:
                 logger.warning(
-                    f"kg-service returned {response.status_code}: "
-                    f"{response.text}"
+                    f"Entity search failed: {entity_search_response.status_code}"
                 )
                 return []
 
-            data = response.json()
-            records = data.get('results', [])
+            entity_data = entity_search_response.json()
+            found_entities = entity_data.get('entities', [])
 
-            # Format results
+            if not found_entities:
+                logger.debug(f"No entities found matching: {entities}")
+                return []
+
+            entity_names = [e['text'] for e in found_entities]
+            logger.debug(f"Found {len(entity_names)} matching entities")
+
+            # Step 2: Get chunks containing these entities
+            chunk_search_response = await client.post(
+                f"{self.kg_service_url}/api/v1/search/chunks",
+                json={
+                    "entity_names": entity_names,
+                    "limit": limit,
+                    "include_document_info": True
+                }
+            )
+
+            if chunk_search_response.status_code != 200:
+                logger.warning(
+                    f"Chunk search failed: {chunk_search_response.status_code}"
+                )
+                return []
+
+            chunk_data = chunk_search_response.json()
+            chunks = chunk_data.get('chunks', [])
+
+            if not chunks:
+                logger.debug("No chunks found for entities")
+                return []
+
+            # Step 3: Format results for hybrid retriever
+            # Note: We return chunk info with vector_rowid for SQLite lookup
+            # The actual content will be retrieved from SQLite in VectorRetriever
             results = []
-            for record in records:
+            for chunk in chunks:
                 # Calculate relevance score based on entity matches
-                entity_count = record.get('entity_count', 1)
+                entity_count = chunk.get('entity_count', 1)
                 relevance_score = min(1.0, entity_count / len(entities))
 
+                # Build result with chunk metadata
                 results.append({
-                    'url': record.get('url'),
-                    'title': record.get('title'),
-                    'content': record.get('content', '')[:10000],  # Truncate
-                    'timestamp': record.get('timestamp'),
-                    'tags': None,  # Neo4j doesn't have tags
+                    'vector_rowid': chunk['vector_rowid'],
+                    'url': chunk.get('document_url', 'unknown'),
+                    'title': chunk.get('document_title', 'unknown'),
+                    'chunk_index': chunk.get('chunk_index', 0),
+                    'matched_entities': chunk.get('matched_entities', []),
                     'relevance_score': relevance_score,
                     'entity_matches': entity_count,
                     'source': 'graph',  # Mark source for result merging
                 })
+
+            logger.info(
+                f"Graph search: {len(entities)} query entities → "
+                f"{len(found_entities)} matches → {len(results)} chunks"
+            )
 
             return results
 
@@ -152,7 +181,7 @@ class GraphRetriever:
             logger.warning("kg-service not available, skipping graph search")
             return []
         except Exception as e:
-            logger.error(f"kg-service query failed: {e}")
+            logger.error(f"kg-service query failed: {e}", exc_info=True)
             return []
 
     async def close(self):

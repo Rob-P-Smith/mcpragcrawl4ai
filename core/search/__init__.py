@@ -19,6 +19,17 @@ from .hybrid_retriever import HybridRetriever, HybridRetrieverSync
 from .entity_expander import EntityExpander, EntityExpanderSync, get_entity_expander
 from .expanded_retriever import ExpandedHybridRetriever, ExpandedHybridRetrieverSync
 
+# Phase 4: Advanced Ranking
+from .advanced_ranker import AdvancedRanker, ContextExtractor
+from .final_retriever import FinalRetriever, create_final_retriever
+
+# Phase 5: API Integration
+from .response_formatter import ResponseFormatter, get_response_formatter
+from .search_handler import SearchHandler, get_search_handler, initialize_search_handler
+
+# Simple Search (original behavior, no KG enhancement)
+from .simple_search import simple_search, get_simple_search_handler
+
 __all__ = [
     # Phase 1
     "QueryParser",
@@ -40,4 +51,18 @@ __all__ = [
     "get_entity_expander",
     "ExpandedHybridRetriever",
     "ExpandedHybridRetrieverSync",
+    # Phase 4
+    "AdvancedRanker",
+    "ContextExtractor",
+    "FinalRetriever",
+    "create_final_retriever",
+    # Phase 5
+    "ResponseFormatter",
+    "get_response_formatter",
+    "SearchHandler",
+    "get_search_handler",
+    "initialize_search_handler",
+    # Simple Search
+    "simple_search",
+    "get_simple_search_handler",
 ]

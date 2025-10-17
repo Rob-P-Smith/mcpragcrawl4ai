@@ -28,6 +28,8 @@ COPY api/ ./api/
 COPY core/operations/ ./operations/
 COPY core/data/ ./core/data/
 COPY core/utilities/ ./core/utilities/
+COPY core/search/ ./core/search/
+COPY taxonomy/ ./taxonomy/
 COPY core/rag_processor.py ./core/rag_processor.py
 COPY deployments/server/start_api_server.py ./start_api_server.py
 

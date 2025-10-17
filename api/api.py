@@ -81,6 +81,23 @@ class SearchRequest(BaseModel):
             return validate_string_length(v, 500, "tags")
         return v
 
+class KGSearchRequest(BaseModel):
+    query: str = Field(..., description="Search query")
+    limit: Optional[int] = Field(10, ge=1, le=1000, description="Number of results")
+    tags: Optional[str] = Field(None, description="Comma-separated tags to filter by")
+    enable_expansion: Optional[bool] = Field(True, description="Enable KG entity expansion")
+    include_context: Optional[bool] = Field(True, description="Include context snippets")
+
+    @validator('query')
+    def validate_query(cls, v):
+        return validate_string_length(v, 500, "query")
+
+    @validator('tags')
+    def validate_tags(cls, v):
+        if v:
+            return validate_string_length(v, 500, "tags")
+        return v
+
 class TargetSearchRequest(BaseModel):
     query: str = Field(..., description="Search query for intelligent tag expansion")
     initial_limit: Optional[int] = Field(5, ge=1, le=100, description="Initial results for tag discovery")
@@ -149,6 +166,9 @@ def create_app() -> FastAPI:
     crawl4ai_url = os.getenv("CRAWL4AI_URL", "http://localhost:11235")
     rag_system = Crawl4AIRAG(crawl4ai_url=crawl4ai_url)
 
+    # Track running deep crawl tasks
+    deep_crawl_tasks = {}  # task_id -> {task, status, result, started_at}
+
     # Middleware for request logging
     @app.middleware("http")
     async def log_requests(request: Request, call_next):
@@ -163,7 +183,109 @@ def create_app() -> FastAPI:
     # Health check endpoint
     @app.get("/health")
     async def health_check():
-        return {"status": "healthy", "timestamp": datetime.now().isoformat()}
+        """
+        Comprehensive health check for mcpragcrawl4ai and kg-project containers
+        Checks container reachability, service health, and database availability
+        """
+        health_status = {
+            "status": "healthy",
+            "timestamp": datetime.now().isoformat(),
+            "services": {}
+        }
+
+        overall_healthy = True
+
+        # Check mcpragcrawl4ai container (Crawl4AI service)
+        crawl4ai_health = {
+            "name": "mcpragcrawl4ai",
+            "status": "unknown",
+            "reachable": False,
+            "database": "unknown"
+        }
+
+        try:
+            crawl4ai_url = os.getenv("CRAWL4AI_URL", "http://localhost:11235")
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.get(f"{crawl4ai_url}/")
+                if response.status_code == 200:
+                    crawl4ai_health["status"] = "healthy"
+                    crawl4ai_health["reachable"] = True
+                else:
+                    crawl4ai_health["status"] = f"unhealthy (HTTP {response.status_code})"
+                    overall_healthy = False
+        except Exception as e:
+            crawl4ai_health["status"] = "unhealthy"
+            crawl4ai_health["error"] = str(e)
+            overall_healthy = False
+
+        # Check local database (SQLite for mcpragcrawl4ai)
+        try:
+            GLOBAL_DB.list_content(limit=1)
+            crawl4ai_health["database"] = "healthy"
+        except Exception as e:
+            crawl4ai_health["database"] = f"unhealthy: {str(e)}"
+            overall_healthy = False
+
+        health_status["services"]["mcpragcrawl4ai"] = crawl4ai_health
+
+        # Check kg-project container (Knowledge Graph service)
+        kg_health = {
+            "name": "kg-project",
+            "status": "unknown",
+            "reachable": False,
+            "database": "unknown"
+        }
+
+        try:
+            kg_service_url = os.getenv("KG_SERVICE_URL", "http://localhost:8088")
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                # Check KG service health endpoint
+                response = await client.get(f"{kg_service_url}/health")
+                if response.status_code == 200:
+                    kg_health["status"] = "healthy"
+                    kg_health["reachable"] = True
+
+                    # Try to get database status from response
+                    try:
+                        health_data = response.json()
+                        if "database" in health_data:
+                            kg_health["database"] = health_data["database"]
+                        elif "neo4j" in health_data:
+                            kg_health["database"] = health_data["neo4j"]
+                    except:
+                        pass
+                else:
+                    kg_health["status"] = f"unhealthy (HTTP {response.status_code})"
+                    overall_healthy = False
+        except Exception as e:
+            kg_health["status"] = "unhealthy"
+            kg_health["error"] = str(e)
+            overall_healthy = False
+
+        # If database status not retrieved from health endpoint, try direct Neo4j check
+        if kg_health["database"] == "unknown" and kg_health["reachable"]:
+            try:
+                neo4j_url = os.getenv("NEO4J_URI", "bolt://localhost:7687")
+                async with httpx.AsyncClient(timeout=3.0) as client:
+                    # Try to check if Neo4j is responding (HTTP endpoint on 7474)
+                    neo4j_http_url = neo4j_url.replace("bolt://", "http://").replace(":7687", ":7474")
+                    response = await client.get(neo4j_http_url)
+                    if response.status_code in [200, 401]:  # 401 means it's responding but needs auth
+                        kg_health["database"] = "healthy"
+                    else:
+                        kg_health["database"] = f"unhealthy (HTTP {response.status_code})"
+                        overall_healthy = False
+            except Exception as e:
+                kg_health["database"] = f"unhealthy: {str(e)}"
+                overall_healthy = False
+
+        health_status["services"]["kg-project"] = kg_health
+
+        # Update overall status
+        if not overall_healthy:
+            health_status["status"] = "degraded"
+
+        return health_status
 
     # Help endpoint - List all available tools
     @app.get("/api/v1/help")
@@ -192,14 +314,14 @@ def create_app() -> FastAPI:
                     "parameters": "url: string, max_depth?: number (1-5, default 2), max_pages?: number (1-250, default 10), retention_policy?: string, tags?: string, include_external?: boolean, score_threshold?: number (0.0-1.0), timeout?: number (60-1800)"
                 },
                 {
-                    "name": "search_knowledge",
-                    "example": "Search for 'async python patterns' in stored knowledge",
-                    "parameters": "query: string, limit?: number (default 5, max 1000), tags?: string (comma-separated tags for filtering)"
+                    "name": "simple_search",
+                    "example": "Simple vector similarity search for 'FastAPI authentication' without KG enhancement",
+                    "parameters": "query: string, limit?: number (default 10, max 1000), tags?: string (comma-separated tags for filtering)"
                 },
                 {
-                    "name": "target_search",
-                    "example": "Intelligent search for 'react hooks' that discovers and expands by related tags",
-                    "parameters": "query: string, initial_limit?: number (1-100, default 5), expanded_limit?: number (1-1000, default 20)"
+                    "name": "kg_search",
+                    "example": "KG-enhanced search for 'FastAPI async' with GLiNER entity extraction, graph expansion, and multi-signal ranking (Phase 1-5 pipeline)",
+                    "parameters": "query: string, limit?: number (default 10, max 1000), tags?: string, enable_expansion?: boolean (default true), include_context?: boolean (default true)"
                 },
                 {
                     "name": "list_memory",
@@ -209,11 +331,6 @@ def create_app() -> FastAPI:
                 {
                     "name": "get_database_stats",
                     "example": "Get database statistics including record counts and storage size",
-                    "parameters": "none"
-                },
-                {
-                    "name": "list_domains",
-                    "example": "List all unique domains stored (e.g., github.com, docs.python.org)",
                     "parameters": "none"
                 },
                 {
@@ -248,8 +365,8 @@ def create_app() -> FastAPI:
                 "formats": {
                     "retention_policy": ["permanent", "session_only", "30_days"],
                     "http_methods": {
-                        "GET": ["/status", "/memory", "/stats", "/domains", "/blocked-domains", "/help"],
-                        "POST": ["/crawl", "/crawl/store", "/crawl/temp", "/crawl/deep/store", "/search", "/search/target", "/blocked-domains"],
+                        "GET": ["/status", "/memory", "/stats", "/blocked-domains", "/help"],
+                        "POST": ["/crawl", "/crawl/store", "/crawl/temp", "/crawl/deep/store", "/search", "/search/simple", "/search/kg", "/blocked-domains"],
                         "DELETE": ["/memory", "/memory/temp", "/blocked-domains"]
                     }
                 }
@@ -367,7 +484,9 @@ def create_app() -> FastAPI:
             max_depth = SQLInjectionDefense.sanitize_integer(request.max_depth, 1, 5, "max_depth")
             max_pages = SQLInjectionDefense.sanitize_integer(request.max_pages, 1, 250, "max_pages")
 
-            result = await rag_system.deep_crawl_and_store(
+            # Run in thread pool to avoid blocking the API
+            result = await asyncio.to_thread(
+                rag_system.deep_crawl_and_store,
                 sanitized_url,
                 retention_policy=sanitized_retention,
                 tags=sanitized_tags,
@@ -384,7 +503,7 @@ def create_app() -> FastAPI:
             log_error("api_deep_crawl_store", e, request.url)
             raise HTTPException(status_code=500, detail=str(e))
 
-    # Search stored knowledge
+    # Search stored knowledge (simple vector search)
     @app.post("/api/v1/search")
     async def search_memory(request: SearchRequest, session_info: Dict = Depends(verify_api_key)):
         try:
@@ -400,11 +519,9 @@ def create_app() -> FastAPI:
             if 'tags' in sanitized:
                 tags_list = [tag.strip() for tag in sanitized['tags'].split(',') if tag.strip()]
 
-            result = await rag_system.search_knowledge(
-                sanitized['query'],
-                sanitized['limit'],
-                tags=tags_list
-            )
+            # Use simple_search (original behavior, no KG enhancement)
+            from core.search import simple_search
+            result = simple_search(GLOBAL_DB, sanitized['query'], sanitized['limit'], tags=tags_list)
             return {"success": True, "data": result, "timestamp": datetime.now().isoformat()}
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
@@ -412,33 +529,73 @@ def create_app() -> FastAPI:
             log_error("api_search_memory", e)
             raise HTTPException(status_code=500, detail=str(e))
 
-    # Target search with tag expansion
-    @app.post("/api/v1/search/target")
-    async def target_search(request: TargetSearchRequest, session_info: Dict = Depends(verify_api_key)):
+    # Simple search endpoint (alias for /search, kept for explicit naming)
+    @app.post("/api/v1/search/simple")
+    async def simple_search_endpoint(request: SearchRequest, session_info: Dict = Depends(verify_api_key)):
+        """Simple vector similarity search without KG enhancement"""
+        return await search_memory(request, session_info)
+
+    # KG-enhanced search endpoint (Phase 1-5 complete pipeline)
+    @app.post("/api/v1/search/kg")
+    async def kg_enhanced_search(request: KGSearchRequest, session_info: Dict = Depends(verify_api_key)):
+        """
+        Knowledge Graph-Enhanced Search using complete Phase 1-5 pipeline:
+        - Phase 1: GLiNER entity extraction + query embedding
+        - Phase 2: Parallel vector + graph search
+        - Phase 3: KG-powered entity expansion
+        - Phase 4: Multi-signal ranking (5 signals)
+        - Phase 5: Formatted response with metadata
+        """
         try:
+            import os
+            import asyncio
+            from core.search import SearchHandler
+
             # Sanitize inputs
             sanitized_query = SQLInjectionDefense.sanitize_string(
                 request.query,
                 max_length=1000,
                 field_name="query"
             )
-            initial_limit = SQLInjectionDefense.sanitize_integer(
-                request.initial_limit, 1, 100, "initial_limit"
-            )
-            expanded_limit = SQLInjectionDefense.sanitize_integer(
-                request.expanded_limit, 1, 1000, "expanded_limit"
+            limit = SQLInjectionDefense.sanitize_integer(
+                request.limit, 1, 1000, "limit"
             )
 
-            result = await rag_system.target_search(
-                sanitized_query,
-                initial_limit,
-                expanded_limit
+            # Parse tags
+            tags_list = None
+            if request.tags:
+                tags_str = SQLInjectionDefense.sanitize_string(
+                    request.tags,
+                    max_length=500,
+                    field_name="tags"
+                )
+                tags_list = [tag.strip() for tag in tags_str.split(',') if tag.strip()]
+
+            # Get KG service URL from environment
+            kg_service_url = os.getenv("KG_SERVICE_URL", "http://localhost:8088")
+
+            # Initialize SearchHandler with complete pipeline
+            handler = SearchHandler(
+                db_manager=GLOBAL_DB,
+                kg_service_url=kg_service_url
             )
+
+            # Execute KG-enhanced search in thread pool to avoid event loop conflict
+            result = await asyncio.to_thread(
+                handler.search,
+                query=sanitized_query,
+                limit=limit,
+                tags=tags_list,
+                enable_expansion=request.enable_expansion,
+                include_context=request.include_context
+            )
+
             return {"success": True, "data": result, "timestamp": datetime.now().isoformat()}
+
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
         except Exception as e:
-            log_error("api_target_search", e)
+            log_error("api_kg_search", e)
             raise HTTPException(status_code=500, detail=str(e))
 
     # List stored content
@@ -509,29 +666,110 @@ def create_app() -> FastAPI:
     # Get database statistics
     @app.get("/api/v1/stats")
     async def get_database_stats(session_info: Dict = Depends(verify_api_key)):
+        """
+        Get comprehensive statistics from both mcpragcrawl4ai and kg-project services
+        Includes database stats, service metrics, and health information
+        """
         try:
-            stats = GLOBAL_DB.get_database_stats()
-            return {
+            stats = {
                 "success": True,
-                "data": stats,
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat(),
+                "services": {}
             }
+
+            # Get mcpragcrawl4ai database stats
+            try:
+                crawl4ai_stats = GLOBAL_DB.get_database_stats()
+
+                # Get KG worker queue stats
+                from core.data.kg_worker import get_kg_worker
+                kg_worker = get_kg_worker()
+                kg_worker_stats = None
+                if kg_worker:
+                    try:
+                        kg_worker_stats = kg_worker.get_stats()
+                    except Exception as kg_err:
+                        print(f"Error getting KG worker stats: {kg_err}", file=sys.stderr)
+
+                stats["services"]["mcpragcrawl4ai"] = {
+                    "status": "healthy",
+                    "database": crawl4ai_stats,
+                    "kg_worker": kg_worker_stats,
+                    "service_url": os.getenv("CRAWL4AI_URL", "http://localhost:11235")
+                }
+            except Exception as e:
+                stats["services"]["mcpragcrawl4ai"] = {
+                    "status": "error",
+                    "error": str(e)
+                }
+
+            # Get kg-project stats
+            kg_stats = {
+                "status": "unknown",
+                "service_url": os.getenv("KG_SERVICE_URL", "http://localhost:8088")
+            }
+
+            try:
+                kg_service_url = os.getenv("KG_SERVICE_URL", "http://localhost:8088")
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    # Try to get stats from KG service
+                    try:
+                        response = await client.get(f"{kg_service_url}/stats")
+                        if response.status_code == 200:
+                            kg_stats["status"] = "healthy"
+                            kg_stats["metrics"] = response.json()
+                        else:
+                            kg_stats["status"] = f"error (HTTP {response.status_code})"
+                    except:
+                        # If no stats endpoint, try health endpoint
+                        response = await client.get(f"{kg_service_url}/health")
+                        if response.status_code == 200:
+                            kg_stats["status"] = "healthy"
+                            kg_stats["health"] = response.json()
+                        else:
+                            kg_stats["status"] = "unreachable"
+            except Exception as e:
+                kg_stats["status"] = "error"
+                kg_stats["error"] = str(e)
+
+            stats["services"]["kg-project"] = kg_stats
+
+            # Get Neo4j database stats if available
+            neo4j_stats = {
+                "status": "unknown",
+                "database_uri": os.getenv("NEO4J_URI", "bolt://localhost:7687")
+            }
+
+            try:
+                # Try to get Neo4j stats through KG service
+                kg_service_url = os.getenv("KG_SERVICE_URL", "http://localhost:8088")
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    try:
+                        response = await client.get(f"{kg_service_url}/neo4j/stats")
+                        if response.status_code == 200:
+                            neo4j_stats["status"] = "healthy"
+                            neo4j_stats["metrics"] = response.json()
+                        else:
+                            neo4j_stats["status"] = "no_stats_endpoint"
+                    except:
+                        # Check if Neo4j is responding
+                        neo4j_url = os.getenv("NEO4J_URI", "bolt://localhost:7687")
+                        neo4j_http_url = neo4j_url.replace("bolt://", "http://").replace(":7687", ":7474")
+                        response = await client.get(neo4j_http_url)
+                        if response.status_code in [200, 401]:
+                            neo4j_stats["status"] = "healthy"
+                        else:
+                            neo4j_stats["status"] = "unreachable"
+            except Exception as e:
+                neo4j_stats["status"] = "error"
+                neo4j_stats["error"] = str(e)
+
+            stats["services"]["neo4j"] = neo4j_stats
+
+            return stats
+
         except Exception as e:
             log_error("api_get_stats", e)
-            raise HTTPException(status_code=500, detail=str(e))
-
-    # List unique domains
-    @app.get("/api/v1/domains")
-    async def list_domains(session_info: Dict = Depends(verify_api_key)):
-        try:
-            domains = GLOBAL_DB.list_domains()
-            return {
-                "success": True,
-                "data": domains,
-                "timestamp": datetime.now().isoformat()
-            }
-        except Exception as e:
-            log_error("api_list_domains", e)
             raise HTTPException(status_code=500, detail=str(e))
 
     # Blocked domains management
@@ -698,6 +936,18 @@ def create_app() -> FastAPI:
         # Start background task for session cleanup
         asyncio.create_task(session_cleanup_task())
 
+        # Start KG worker for processing knowledge graph queue
+        from core.data.kg_worker import start_kg_worker
+        asyncio.create_task(start_kg_worker(GLOBAL_DB))
+
+    @app.on_event("shutdown")
+    async def shutdown_event():
+        # Stop KG worker gracefully
+        from core.data.kg_worker import stop_kg_worker
+        from core.data.kg_config import close_kg_config
+        await stop_kg_worker()
+        await close_kg_config()
+
     async def session_cleanup_task():
         while True:
             try:
@@ -772,19 +1022,6 @@ class APIClient:
             "timeout": timeout
         })
 
-    async def search_knowledge(self, query: str, limit: int = 5, tags: Optional[str] = None) -> Dict[str, Any]:
-        payload = {"query": query, "limit": limit}
-        if tags:
-            payload["tags"] = tags
-        return await self.make_request("POST", "/api/v1/search", payload)
-
-    async def target_search(self, query: str, initial_limit: int = 5, expanded_limit: int = 20) -> Dict[str, Any]:
-        return await self.make_request("POST", "/api/v1/search/target", {
-            "query": query,
-            "initial_limit": initial_limit,
-            "expanded_limit": expanded_limit
-        })
-
     async def list_memory(self, filter: Optional[str] = None, limit: int = 100) -> Dict[str, Any]:
         params = {}
         if filter:
@@ -795,9 +1032,6 @@ class APIClient:
 
     async def get_database_stats(self) -> Dict[str, Any]:
         return await self.make_request("GET", "/api/v1/stats")
-
-    async def list_domains(self) -> Dict[str, Any]:
-        return await self.make_request("GET", "/api/v1/domains")
 
     async def add_blocked_domain(self, pattern: str, description: str = "") -> Dict[str, Any]:
         return await self.make_request("POST", "/api/v1/blocked-domains", {

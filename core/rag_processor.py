@@ -74,13 +74,29 @@ class MCPServer:
                 }
             },
             {
-                "name": "search_memory",
-                "description": "Search stored knowledge using semantic similarity",
+                "name": "simple_search",
+                "description": "Simple vector similarity search without KG enhancement - fast, straightforward semantic search",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
                         "query": {"type": "string", "description": "Search query"},
-                        "limit": {"type": "integer", "description": "Number of results (default 5)"}
+                        "limit": {"type": "integer", "description": "Number of results (default 10)"},
+                        "tags": {"type": "string", "description": "Optional comma-separated tags to filter by"}
+                    },
+                    "required": ["query"]
+                }
+            },
+            {
+                "name": "kg_search",
+                "description": "Knowledge Graph-Enhanced Search with GLiNER entity extraction, graph expansion, and multi-signal ranking (Phase 1-5 complete pipeline)",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "Search query"},
+                        "limit": {"type": "integer", "description": "Number of results (default 10)"},
+                        "tags": {"type": "string", "description": "Optional comma-separated tags to filter by"},
+                        "enable_expansion": {"type": "boolean", "description": "Enable KG entity expansion (default true)"},
+                        "include_context": {"type": "boolean", "description": "Include context snippets (default true)"}
                     },
                     "required": ["query"]
                 }
@@ -99,14 +115,6 @@ class MCPServer:
             {
                 "name": "db_stats",
                 "description": "Get comprehensive database statistics including record counts, storage size, and recent activity",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {}
-                }
-            },
-            {
-                "name": "list_domains",
-                "description": "List all unique website domains (e.g., github.com, cnn.com) that have been stored in the knowledge base with page counts",
                 "inputSchema": {
                     "type": "object",
                     "properties": {}
@@ -274,9 +282,9 @@ class MCPServer:
                                 tags=tags
                             )
                 
-                elif tool_name == "search_memory":
+                elif tool_name == "simple_search":
                     query = validate_string_length(arguments["query"], 500, "query")
-                    limit = validate_integer_range(arguments.get("limit", 5), 1, 1000, "limit")
+                    limit = validate_integer_range(arguments.get("limit", 10), 1, 1000, "limit")
                     tags_str = arguments.get("tags")
                     tags_list = None
                     if tags_str:
@@ -287,18 +295,42 @@ class MCPServer:
                         api_result = await api_client.search_knowledge(query, limit, tags=tags_str if tags_str else None)
                         result = api_result.get("data", api_result)
                     else:
-                        result = await self.rag.search_knowledge(query, limit, tags=tags_list)
+                        # Use simple_search from core.search module (original behavior)
+                        from core.search import simple_search
+                        result = simple_search(GLOBAL_DB, query, limit, tags=tags_list)
 
-                elif tool_name == "target_search":
+                elif tool_name == "kg_search":
                     query = validate_string_length(arguments["query"], 500, "query")
-                    initial_limit = validate_integer_range(arguments.get("initial_limit", 5), 1, 100, "initial_limit")
-                    expanded_limit = validate_integer_range(arguments.get("expanded_limit", 20), 1, 1000, "expanded_limit")
+                    limit = validate_integer_range(arguments.get("limit", 10), 1, 1000, "limit")
+                    tags_str = arguments.get("tags")
+                    tags_list = None
+                    if tags_str:
+                        tags_str = validate_string_length(tags_str, 500, "tags")
+                        tags_list = [tag.strip() for tag in tags_str.split(',') if tag.strip()]
+
+                    enable_expansion = arguments.get("enable_expansion", True)
+                    include_context = arguments.get("include_context", True)
 
                     if IS_CLIENT_MODE:
-                        api_result = await api_client.target_search(query, initial_limit, expanded_limit)
-                        result = api_result.get("data", api_result)
+                        # TODO: Add kg_search to API client
+                        raise Exception("kg_search not implemented in client mode yet")
                     else:
-                        result = await self.rag.target_search(query, initial_limit, expanded_limit)
+                        # Use SearchHandler from core.search module (Phase 1-5 pipeline)
+                        import os
+                        from core.search import SearchHandler
+
+                        kg_service_url = os.getenv("KG_SERVICE_URL", "http://localhost:8088")
+                        handler = SearchHandler(
+                            db_manager=GLOBAL_DB,
+                            kg_service_url=kg_service_url
+                        )
+                        result = handler.search(
+                            query=query,
+                            limit=limit,
+                            tags=tags_list,
+                            enable_expansion=enable_expansion,
+                            include_context=include_context
+                        )
 
                 elif tool_name == "list_memory":
                     filter_param = arguments.get("filter")
@@ -321,13 +353,6 @@ class MCPServer:
                         result = api_result.get("data", api_result)
                     else:
                         result = await self.rag.get_database_stats()
-
-                elif tool_name == "list_domains":
-                    if IS_CLIENT_MODE:
-                        api_result = await api_client.list_domains()
-                        result = api_result.get("data", api_result)
-                    else:
-                        result = await self.rag.list_domains()
 
                 elif tool_name == "add_blocked_domain":
                     pattern = arguments["pattern"]

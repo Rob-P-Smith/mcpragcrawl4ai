@@ -103,6 +103,9 @@ class EntityExpander:
         """
         Find entities directly related through Neo4j relationships
 
+        Uses the new /api/v1/expand/entities endpoint which handles
+        entity expansion via co-occurrence and relationships.
+
         Args:
             entities: Source entities
             max_results: Max related entities to return
@@ -114,61 +117,59 @@ class EntityExpander:
         try:
             client = await self._get_client()
 
-            # Cypher query to find related entities
-            cypher = """
-            MATCH (e1:Entity)-[r:RELATED_TO|:CO_OCCURS_WITH]-(e2:Entity)
-            WHERE e1.name IN $entity_names
-              AND r.confidence >= $min_confidence
-              AND e2.name <> e1.name
-            WITH e2, r, COUNT(DISTINCT e1) as connection_count
-            ORDER BY connection_count DESC, r.confidence DESC
-            LIMIT $max_results
-            RETURN e2.name as entity,
-                   e2.type as entity_type,
-                   r.confidence as confidence,
-                   connection_count,
-                   type(r) as relationship_type
-            """
-
+            # Call entity expansion endpoint
             response = await client.post(
-                f"{self.kg_service_url}/api/v1/query/cypher",
+                f"{self.kg_service_url}/api/v1/expand/entities",
                 json={
-                    "query": cypher,
-                    "parameters": {
-                        "entity_names": entities,
-                        "min_confidence": min_confidence,
-                        "max_results": max_results
-                    }
+                    "entity_names": entities,
+                    "max_expansions": max_results,
+                    "min_confidence": min_confidence,
+                    "expansion_depth": 1
                 }
             )
 
             if response.status_code != 200:
-                logger.warning(f"kg-service returned {response.status_code}")
+                logger.warning(
+                    f"Entity expansion returned {response.status_code}: "
+                    f"{response.text}"
+                )
                 return self._empty_expansion()
 
             data = response.json()
-            records = data.get('results', [])
+
+            if not data.get('success'):
+                logger.warning("Entity expansion failed")
+                return self._empty_expansion()
+
+            # Extract expanded entities
+            expanded_list = data.get('expanded_entities', [])
+            original = data.get('original_entities', entities)
 
             # Format results
             expanded_entities = []
             relationships = []
             confidence_scores = {}
 
-            for record in records:
-                entity = record.get('entity')
-                if entity and entity not in entities:
-                    expanded_entities.append(entity)
-                    confidence_scores[entity] = record.get('confidence', 0.5)
+            for entity_obj in expanded_list:
+                entity_text = entity_obj.get('text')
+                if entity_text and entity_text not in original:
+                    expanded_entities.append(entity_text)
+                    confidence = entity_obj.get('relationship_confidence', 0.5)
+                    confidence_scores[entity_text] = confidence
                     relationships.append({
-                        'entity': entity,
-                        'type': record.get('entity_type'),
-                        'relationship': record.get('relationship_type'),
-                        'confidence': record.get('confidence'),
-                        'connections': record.get('connection_count')
+                        'entity': entity_text,
+                        'type': entity_obj.get('type_primary'),
+                        'relationship': entity_obj.get('relationship_type', 'CO_OCCURS'),
+                        'confidence': confidence,
+                        'mention_count': entity_obj.get('mention_count', 0)
                     })
 
+            logger.debug(
+                f"Entity expansion: {len(original)} → {len(expanded_entities)} new"
+            )
+
             return {
-                'original_entities': entities,
+                'original_entities': original,
                 'expanded_entities': expanded_entities,
                 'relationships': relationships,
                 'confidence_scores': confidence_scores
@@ -178,7 +179,7 @@ class EntityExpander:
             logger.warning("kg-service not available")
             return self._empty_expansion()
         except Exception as e:
-            logger.error(f"Related entity search failed: {e}")
+            logger.error(f"Related entity search failed: {e}", exc_info=True)
             return self._empty_expansion()
 
     async def _find_cooccurring_entities(
@@ -190,6 +191,9 @@ class EntityExpander:
         """
         Find entities that co-occur with query entities in documents
 
+        Note: The /api/v1/expand/entities endpoint already handles co-occurrence,
+        so this method reuses the same endpoint with different parameters.
+
         Args:
             entities: Source entities
             max_results: Max co-occurring entities
@@ -199,68 +203,16 @@ class EntityExpander:
             Expansion dictionary
         """
         try:
-            client = await self._get_client()
-
-            # Cypher query for co-occurrences
-            cypher = """
-            MATCH (e1:Entity)-[:MENTIONED_IN]->(d:Document)<-[:MENTIONED_IN]-(e2:Entity)
-            WHERE e1.name IN $entity_names
-              AND e2.name <> e1.name
-            WITH e2, COUNT(DISTINCT d) as doc_count
-            WHERE doc_count >= 2
-            ORDER BY doc_count DESC
-            LIMIT $max_results
-            RETURN e2.name as entity,
-                   e2.type as entity_type,
-                   doc_count
-            """
-
-            response = await client.post(
-                f"{self.kg_service_url}/api/v1/query/cypher",
-                json={
-                    "query": cypher,
-                    "parameters": {
-                        "entity_names": entities,
-                        "max_results": max_results
-                    }
-                }
+            # The expansion endpoint already handles co-occurrence
+            # So we can just call it with appropriate parameters
+            return await self._find_related_entities(
+                entities,
+                max_results,
+                min_confidence
             )
 
-            if response.status_code != 200:
-                return {'expanded_entities': [], 'relationships': [], 'confidence_scores': {}}
-
-            data = response.json()
-            records = data.get('results', [])
-
-            expanded_entities = []
-            relationships = []
-            confidence_scores = {}
-
-            for record in records:
-                entity = record.get('entity')
-                if entity and entity not in entities:
-                    doc_count = record.get('doc_count', 1)
-                    confidence = min(1.0, doc_count / 10.0)  # Normalize
-
-                    if confidence >= min_confidence:
-                        expanded_entities.append(entity)
-                        confidence_scores[entity] = confidence
-                        relationships.append({
-                            'entity': entity,
-                            'type': record.get('entity_type'),
-                            'relationship': 'CO_OCCURS_IN_DOCS',
-                            'confidence': confidence,
-                            'doc_count': doc_count
-                        })
-
-            return {
-                'expanded_entities': expanded_entities,
-                'relationships': relationships,
-                'confidence_scores': confidence_scores
-            }
-
         except Exception as e:
-            logger.error(f"Co-occurrence search failed: {e}")
+            logger.error(f"Co-occurrence search failed: {e}", exc_info=True)
             return {'expanded_entities': [], 'relationships': [], 'confidence_scores': {}}
 
     def _merge_expansions(self, expansion1: Dict, expansion2: Dict) -> Dict:
