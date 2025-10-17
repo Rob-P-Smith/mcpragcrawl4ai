@@ -200,6 +200,51 @@ class KGQueueManager:
             logger.error(f"Failed to queue for KG processing: {e}")
             return False
 
+    def queue_for_kg_processing_sync(
+        self,
+        content_id: int,
+        priority: int = 1
+    ) -> bool:
+        """
+        Synchronously add content to KG processing queue (thread-safe)
+
+        This version doesn't check service health - just queues the item.
+        The KG worker will handle service availability when processing.
+        Use this from synchronous contexts (like thread pool workers).
+
+        Args:
+            content_id: Content ID to queue
+            priority: Priority level (higher = process first)
+
+        Returns:
+            True if queued, False if already in queue or error
+        """
+        # Check if KG service is enabled
+        if not self.kg_config.enabled:
+            logger.debug(f"KG service disabled - not queuing content_id={content_id}")
+            return False
+
+        try:
+            self.db.execute('''
+                INSERT INTO kg_processing_queue
+                (content_id, status, priority)
+                VALUES (?, 'pending', ?)
+            ''', (content_id, priority))
+
+            self.db.commit()
+
+            logger.info(f"✓ Queued content_id={content_id} for KG processing (sync)")
+            return True
+
+        except sqlite3.IntegrityError:
+            # Already in queue
+            logger.debug(f"Content {content_id} already in KG queue")
+            return False
+
+        except sqlite3.Error as e:
+            logger.error(f"Failed to queue for KG processing: {e}")
+            return False
+
     def get_chunk_metadata_for_content(
         self,
         content_id: int

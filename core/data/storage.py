@@ -354,15 +354,15 @@ class RAGDatabase:
                             full_markdown = row[0]
                             doc_title = row[1]
 
-                            # Schedule KG queue check (async)
+                            # Queue for KG processing (sync - works in threads)
                             try:
-                                loop = asyncio.get_event_loop()
-                                loop.create_task(
-                                    self._queue_for_kg_async(content_id, url, doc_title, full_markdown)
-                                )
-                            except RuntimeError:
-                                # Event loop not running, skip KG queuing
-                                pass
+                                kg_queue = KGQueueManager(self.db)
+                                queued = kg_queue.queue_for_kg_processing_sync(content_id, priority=1)
+                                if queued:
+                                    print(f"✓ Queued content_id={content_id} for KG processing", file=sys.stderr, flush=True)
+                            except Exception as kg_err:
+                                # Don't fail content storage if KG queuing fails
+                                print(f"⚠️  KG queuing failed: {kg_err}", file=sys.stderr, flush=True)
 
                 except Exception as e:
                     # Don't fail content storage if KG queuing fails
@@ -394,9 +394,11 @@ class RAGDatabase:
     def generate_embeddings(self, content_id: int, content: str):
         try:
             chunks = self.chunk_content(content)
+            print(f"🔧 DEBUG content_id={content_id}: Created {len(chunks)} chunks from {len(content)} chars", file=sys.stderr, flush=True)
 
             # Filter out navigation chunks before embedding
             filtered_chunks = ContentCleaner.filter_chunks(chunks)
+            print(f"🔧 DEBUG content_id={content_id}: Filtered {len(chunks)} → {len(filtered_chunks)} chunks", file=sys.stderr, flush=True)
 
             if len(filtered_chunks) == 0:
                 print(f"⚠️  No quality chunks after filtering for content_id {content_id}", file=sys.stderr, flush=True)
@@ -407,6 +409,7 @@ class RAGDatabase:
                 print(f"   Filtered {len(chunks)} chunks → {len(filtered_chunks)} quality chunks", file=sys.stderr, flush=True)
 
             embeddings = self.embedder.encode(filtered_chunks)
+            print(f"🔧 DEBUG content_id={content_id}: Generated {len(embeddings)} embeddings", file=sys.stderr, flush=True)
 
             embedding_data = [
                 (embedding.astype(np.float32).tobytes(), content_id)
@@ -418,16 +421,26 @@ class RAGDatabase:
                     INSERT INTO content_vectors (embedding, content_id)
                     VALUES (?, ?)
                 ''', embedding_data)
+                print(f"🔧 DEBUG content_id={content_id}: Inserted {len(embedding_data)} vectors into content_vectors", file=sys.stderr, flush=True)
 
                 # NEW: Store chunk metadata for KG processing
+                print(f"🔧 DEBUG content_id={content_id}: Starting chunk metadata storage...", file=sys.stderr, flush=True)
                 try:
                     vector_rowids = get_vector_rowids_for_content(self.db, content_id)
+                    print(f"🔧 DEBUG content_id={content_id}: Retrieved {len(vector_rowids) if vector_rowids else 0} vector_rowids", file=sys.stderr, flush=True)
 
-                    if vector_rowids and len(vector_rowids) == len(filtered_chunks):
+                    if not vector_rowids:
+                        print(f"⚠️  content_id={content_id}: No vector_rowids found!", file=sys.stderr, flush=True)
+                    elif len(vector_rowids) != len(filtered_chunks):
+                        print(f"⚠️  content_id={content_id}: Mismatch! vector_rowids={len(vector_rowids)} vs filtered_chunks={len(filtered_chunks)}", file=sys.stderr, flush=True)
+                    else:
+                        print(f"🔧 DEBUG content_id={content_id}: Counts match! Proceeding with metadata storage...", file=sys.stderr, flush=True)
+
                         kg_queue = KGQueueManager(self.db)
 
                         # Calculate chunk boundaries in original content
                         chunk_metadata = kg_queue.calculate_chunk_boundaries(content, filtered_chunks)
+                        print(f"🔧 DEBUG content_id={content_id}: Calculated boundaries for {len(chunk_metadata)} chunks", file=sys.stderr, flush=True)
 
                         # Store chunk metadata
                         stored = kg_queue.store_chunk_metadata(
@@ -436,12 +449,13 @@ class RAGDatabase:
                             vector_rowids
                         )
 
-                        if stored > 0:
-                            print(f"   ✓ Stored {stored} chunk metadata records", file=sys.stderr, flush=True)
+                        print(f"✅ content_id={content_id}: Successfully stored {stored} chunk metadata records in content_chunks", file=sys.stderr, flush=True)
 
                 except Exception as e:
-                    # Don't fail embedding process if chunk tracking fails
-                    print(f"⚠️  Chunk metadata tracking failed: {e}", file=sys.stderr, flush=True)
+                    import traceback
+                    print(f"❌ content_id={content_id}: Chunk metadata tracking failed!", file=sys.stderr, flush=True)
+                    print(f"   Error: {e}", file=sys.stderr, flush=True)
+                    print(f"   Traceback: {traceback.format_exc()}", file=sys.stderr, flush=True)
 
             # Track vector changes for RAM DB sync (can't use triggers on virtual tables)
             if self.sync_manager:

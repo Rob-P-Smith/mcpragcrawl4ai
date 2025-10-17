@@ -50,7 +50,19 @@ class RecrawlUtility:
     """Utility to recrawl and update existing URLs with cleaned content via API"""
 
     def __init__(self):
-        self.db_path = os.getenv('DB_PATH', './data/crawl4ai_rag.db')
+        db_path = os.getenv('DB_PATH', './data/crawl4ai_rag.db')
+
+        # Convert Docker path to local path
+        if db_path.startswith('/app/'):
+            db_path = db_path.replace('/app/', './')
+
+        # Make path absolute if it's relative
+        if not os.path.isabs(db_path):
+            # Get project root (3 levels up from utilities/)
+            project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            db_path = os.path.join(project_root, db_path.lstrip('./'))
+
+        self.db_path = db_path
         self.api_url = os.getenv('SERVER_HOST', 'localhost')
         self.api_port = os.getenv('SERVER_PORT', '8080')
         self.api_key = os.getenv('LOCAL_API_KEY')
@@ -394,6 +406,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Recrawl utility for cleaning existing content")
     parser.add_argument("--url", help="Recrawl a single URL")
+    parser.add_argument("--file", help="File containing URLs to recrawl (one per line)")
     parser.add_argument("--all", action="store_true", help="Recrawl all URLs")
     parser.add_argument("--policy", help="Filter by retention policy (permanent, session_only, etc.)")
     parser.add_argument("--tags", help="Filter by tags")
@@ -407,6 +420,31 @@ if __name__ == "__main__":
     if args.url:
         # Single URL
         asyncio.run(recrawl_single(args.url))
+    elif args.file:
+        # File with URLs
+        async def recrawl_from_file():
+            util = RecrawlUtility()
+            await util.initialize()
+            try:
+                # Read URLs from file
+                with open(args.file, 'r') as f:
+                    urls = [line.strip() for line in f if line.strip() and line.strip().startswith('http')]
+
+                print(f"\n📋 Loaded {len(urls)} URLs from {args.file}")
+
+                # Convert to format expected by recrawl_batch
+                url_dicts = [{"url": url} for url in urls]
+
+                await util.recrawl_batch(
+                    url_dicts,
+                    delay=args.delay,
+                    dry_run=args.dry_run,
+                    concurrent=args.concurrent
+                )
+            finally:
+                await util.close()
+
+        asyncio.run(recrawl_from_file())
     elif args.all or args.policy or args.tags:
         # Batch recrawl
         asyncio.run(recrawl_all(

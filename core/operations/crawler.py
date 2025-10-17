@@ -385,10 +385,10 @@ class Crawl4AIRAG:
 
             queue.append((link_url, current_depth + 1))
 
-    async def deep_crawl_and_store(self, url: str, retention_policy: str = 'permanent',
-                                 tags: str = '', max_depth: int = 2, max_pages: int = 10,
-                                 include_external: bool = False, score_threshold: float = 0.0,
-                                 timeout: int = None) -> dict:
+    def deep_crawl_and_store(self, url: str, retention_policy: str = 'permanent',
+                             tags: str = '', max_depth: int = 2, max_pages: int = 10,
+                             include_external: bool = False, score_threshold: float = 0.0,
+                             timeout: int = None) -> dict:
         """
         Client-side BFS deep crawl with English-only language filtering
 

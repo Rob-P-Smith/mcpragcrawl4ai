@@ -23,7 +23,7 @@ class KGServiceConfig:
         # KG Service settings
         self.enabled = os.getenv("KG_SERVICE_ENABLED", "false").lower() == "true"
         self.url = os.getenv("KG_SERVICE_URL", "http://kg-service:8088")
-        self.timeout = float(os.getenv("KG_SERVICE_TIMEOUT", "300.0"))  # 5 minutes
+        self.timeout = float(os.getenv("KG_SERVICE_TIMEOUT", "600.0"))  # 10 minutes
         self.health_check_interval = float(os.getenv("KG_HEALTH_CHECK_INTERVAL", "30.0"))  # 30 seconds
         self.max_retries = int(os.getenv("KG_MAX_RETRIES", "3"))
 

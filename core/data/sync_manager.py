@@ -159,8 +159,124 @@ class DBSyncManager:
         # NOTE: Cannot create triggers on content_vectors because it's a virtual table (sqlite-vec)
         # content_vectors changes will be tracked via manual track_vector_change() calls
 
+        # ====================================================================
+        # Triggers for KG tables
+        # ====================================================================
+
+        # content_chunks triggers
+        self.memory_conn.execute("""
+            CREATE TRIGGER IF NOT EXISTS track_chunks_insert
+            AFTER INSERT ON content_chunks
+            BEGIN
+                INSERT OR REPLACE INTO _sync_tracker (table_name, record_id, operation, timestamp)
+                VALUES ('content_chunks', NEW.rowid, 'INSERT', strftime('%s', 'now'));
+            END
+        """)
+
+        self.memory_conn.execute("""
+            CREATE TRIGGER IF NOT EXISTS track_chunks_update
+            AFTER UPDATE ON content_chunks
+            BEGIN
+                INSERT OR REPLACE INTO _sync_tracker (table_name, record_id, operation, timestamp)
+                VALUES ('content_chunks', NEW.rowid, 'UPDATE', strftime('%s', 'now'));
+            END
+        """)
+
+        self.memory_conn.execute("""
+            CREATE TRIGGER IF NOT EXISTS track_chunks_delete
+            AFTER DELETE ON content_chunks
+            BEGIN
+                INSERT OR REPLACE INTO _sync_tracker (table_name, record_id, operation, timestamp)
+                VALUES ('content_chunks', OLD.rowid, 'DELETE', strftime('%s', 'now'));
+            END
+        """)
+
+        # chunk_entities triggers
+        self.memory_conn.execute("""
+            CREATE TRIGGER IF NOT EXISTS track_entities_insert
+            AFTER INSERT ON chunk_entities
+            BEGIN
+                INSERT OR REPLACE INTO _sync_tracker (table_name, record_id, operation, timestamp)
+                VALUES ('chunk_entities', NEW.id, 'INSERT', strftime('%s', 'now'));
+            END
+        """)
+
+        self.memory_conn.execute("""
+            CREATE TRIGGER IF NOT EXISTS track_entities_update
+            AFTER UPDATE ON chunk_entities
+            BEGIN
+                INSERT OR REPLACE INTO _sync_tracker (table_name, record_id, operation, timestamp)
+                VALUES ('chunk_entities', NEW.id, 'UPDATE', strftime('%s', 'now'));
+            END
+        """)
+
+        self.memory_conn.execute("""
+            CREATE TRIGGER IF NOT EXISTS track_entities_delete
+            AFTER DELETE ON chunk_entities
+            BEGIN
+                INSERT OR REPLACE INTO _sync_tracker (table_name, record_id, operation, timestamp)
+                VALUES ('chunk_entities', OLD.id, 'DELETE', strftime('%s', 'now'));
+            END
+        """)
+
+        # chunk_relationships triggers
+        self.memory_conn.execute("""
+            CREATE TRIGGER IF NOT EXISTS track_relationships_insert
+            AFTER INSERT ON chunk_relationships
+            BEGIN
+                INSERT OR REPLACE INTO _sync_tracker (table_name, record_id, operation, timestamp)
+                VALUES ('chunk_relationships', NEW.id, 'INSERT', strftime('%s', 'now'));
+            END
+        """)
+
+        self.memory_conn.execute("""
+            CREATE TRIGGER IF NOT EXISTS track_relationships_update
+            AFTER UPDATE ON chunk_relationships
+            BEGIN
+                INSERT OR REPLACE INTO _sync_tracker (table_name, record_id, operation, timestamp)
+                VALUES ('chunk_relationships', NEW.id, 'UPDATE', strftime('%s', 'now'));
+            END
+        """)
+
+        self.memory_conn.execute("""
+            CREATE TRIGGER IF NOT EXISTS track_relationships_delete
+            AFTER DELETE ON chunk_relationships
+            BEGIN
+                INSERT OR REPLACE INTO _sync_tracker (table_name, record_id, operation, timestamp)
+                VALUES ('chunk_relationships', OLD.id, 'DELETE', strftime('%s', 'now'));
+            END
+        """)
+
+        # kg_processing_queue triggers
+        self.memory_conn.execute("""
+            CREATE TRIGGER IF NOT EXISTS track_queue_insert
+            AFTER INSERT ON kg_processing_queue
+            BEGIN
+                INSERT OR REPLACE INTO _sync_tracker (table_name, record_id, operation, timestamp)
+                VALUES ('kg_processing_queue', NEW.id, 'INSERT', strftime('%s', 'now'));
+            END
+        """)
+
+        self.memory_conn.execute("""
+            CREATE TRIGGER IF NOT EXISTS track_queue_update
+            AFTER UPDATE ON kg_processing_queue
+            BEGIN
+                INSERT OR REPLACE INTO _sync_tracker (table_name, record_id, operation, timestamp)
+                VALUES ('kg_processing_queue', NEW.id, 'UPDATE', strftime('%s', 'now'));
+            END
+        """)
+
+        self.memory_conn.execute("""
+            CREATE TRIGGER IF NOT EXISTS track_queue_delete
+            AFTER DELETE ON kg_processing_queue
+            BEGIN
+                INSERT OR REPLACE INTO _sync_tracker (table_name, record_id, operation, timestamp)
+                VALUES ('kg_processing_queue', OLD.id, 'DELETE', strftime('%s', 'now'));
+            END
+        """)
+
         self.memory_conn.commit()
-        print("✅ Sync tracking triggers created")
+        print("✅ Sync tracking triggers created (crawled_content + KG tables)")
 
     async def track_write(self, table_name: str):
         """
@@ -327,6 +443,35 @@ class DBSyncManager:
                         changes_by_table['content_vectors']
                     )
 
+                # Process KG table changes
+                if 'content_chunks' in changes_by_table:
+                    await self._sync_table(
+                        disk_conn,
+                        'content_chunks',
+                        changes_by_table['content_chunks']
+                    )
+
+                if 'chunk_entities' in changes_by_table:
+                    await self._sync_table(
+                        disk_conn,
+                        'chunk_entities',
+                        changes_by_table['chunk_entities']
+                    )
+
+                if 'chunk_relationships' in changes_by_table:
+                    await self._sync_table(
+                        disk_conn,
+                        'chunk_relationships',
+                        changes_by_table['chunk_relationships']
+                    )
+
+                if 'kg_processing_queue' in changes_by_table:
+                    await self._sync_table(
+                        disk_conn,
+                        'kg_processing_queue',
+                        changes_by_table['kg_processing_queue']
+                    )
+
                 # Commit all changes
                 disk_conn.commit()
 
@@ -371,6 +516,11 @@ class DBSyncManager:
             'content_vectors': (['rowid', 'embedding', 'content_id'], 'content_id')
         }
 
+        # Special handling for tables with non-standard primary keys
+        CUSTOM_PRIMARY_KEYS = {
+            'content_chunks': 'rowid'  # content_chunks uses rowid as primary key
+        }
+
         # Get column names for this table
         if table_name in VIRTUAL_TABLE_SCHEMAS:
             # Use hard-coded schema for virtual tables (PRAGMA table_info returns empty for vec0)
@@ -381,7 +531,8 @@ class DBSyncManager:
             columns = [row[1] for row in self.memory_conn.execute(
                 f"PRAGMA table_info({table_name})"
             ).fetchall()]
-            pk_column = 'id'  # Default primary key for regular tables
+            # Use custom PK if specified, otherwise default to 'id'
+            pk_column = CUSTOM_PRIMARY_KEYS.get(table_name, 'id')
 
         # Validate we got columns
         if not columns:

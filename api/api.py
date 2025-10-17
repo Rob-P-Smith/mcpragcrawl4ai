@@ -145,13 +145,41 @@ def create_app() -> FastAPI:
             allow_headers=["*"],
         )
 
+    # Session cleanup background task
+    async def session_cleanup_task():
+        while True:
+            try:
+                cleanup_sessions()
+                await asyncio.sleep(3600)  # Run every hour
+            except Exception as e:
+                log_error("session_cleanup_task", e)
+                await asyncio.sleep(300)  # Retry in 5 minutes if error
+
     # Startup event - initialize RAM DB
     @app.on_event("startup")
     async def startup_event():
-        """Initialize RAM database on startup if enabled"""
+        """Initialize RAM database and background workers on startup"""
         print("🚀 Starting Crawl4AI RAG Server...")
         await GLOBAL_DB.initialize_async()
         print("✅ Server ready")
+
+        # Start background task for session cleanup
+        asyncio.create_task(session_cleanup_task())
+
+        # Start KG worker for processing knowledge graph queue
+        print("🚀 Starting KG worker...", file=sys.stderr, flush=True)
+        from core.data.kg_worker import start_kg_worker
+        asyncio.create_task(start_kg_worker(GLOBAL_DB))
+        print("✓ KG worker task created", file=sys.stderr, flush=True)
+
+    @app.on_event("shutdown")
+    async def shutdown_event():
+        """Cleanup on shutdown"""
+        # Stop KG worker gracefully
+        from core.data.kg_worker import stop_kg_worker
+        from core.data.kg_config import close_kg_config
+        await stop_kg_worker()
+        await close_kg_config()
 
     # Global exception handler
     @app.exception_handler(Exception)
@@ -929,33 +957,6 @@ def create_app() -> FastAPI:
         except Exception as e:
             log_error("api_clear_temp_memory", e)
             raise HTTPException(status_code=500, detail=str(e))
-
-    # Session cleanup task
-    @app.on_event("startup")
-    async def startup_event():
-        # Start background task for session cleanup
-        asyncio.create_task(session_cleanup_task())
-
-        # Start KG worker for processing knowledge graph queue
-        from core.data.kg_worker import start_kg_worker
-        asyncio.create_task(start_kg_worker(GLOBAL_DB))
-
-    @app.on_event("shutdown")
-    async def shutdown_event():
-        # Stop KG worker gracefully
-        from core.data.kg_worker import stop_kg_worker
-        from core.data.kg_config import close_kg_config
-        await stop_kg_worker()
-        await close_kg_config()
-
-    async def session_cleanup_task():
-        while True:
-            try:
-                cleanup_sessions()
-                await asyncio.sleep(3600)  # Run every hour
-            except Exception as e:
-                log_error("session_cleanup_task", e)
-                await asyncio.sleep(300)  # Retry in 5 minutes if error
 
     return app
 
